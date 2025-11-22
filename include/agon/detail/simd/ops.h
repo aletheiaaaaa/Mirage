@@ -17,3 +17,5 @@
 #include "ops/load.h"
 #include "ops/store.h"
 #include "ops/set1.h"
+#include "ops/setzero.h"
+#include "ops/reduce_add.h"

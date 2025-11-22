@@ -16,10 +16,11 @@ namespace agon::estim {
             explicit Estimator(std::initializer_list<IParameter*> params);
 
             void add_parameter(IParameter& param);
+            void clip_grad_norm(double max_norm);
 
-            virtual void needs_eval() = 0;
+            virtual bool needs_eval() = 0;
             virtual void perturb() = 0;
-            virtual void observe() = 0;
+            virtual void observe(double value) = 0;
             virtual void finalize() = 0;
 
             virtual ~Estimator() = default;
