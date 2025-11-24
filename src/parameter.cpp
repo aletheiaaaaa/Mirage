@@ -189,12 +189,12 @@ namespace agon {
 
                 if constexpr (simd::IsUpcast<T, Q>) {
                     constexpr size_t mult = simd::vec<T>::size / simd::vec<Q>::size;
-                    simd::unroll<mult>([&]<size_t j>() {
-                        constexpr size_t q_offset = j * simd::vec<Q>::size;
+                    for (size_t j = 0; j < mult; ++j) {
+                        size_t sub_offset = j * simd::vec<Q>::size;
 
-                        auto q_subvec = simd::cast<simd::vec<Q>, j>(q_vec);
-                        simd::store(&quantized_data[i + offset + q_offset], q_subvec);
-                    });
+                        auto sub_q_vec = simd::cast<simd::vec<Q>, j>(q_vec);
+                        simd::store(&quantized_data[i + offset + sub_offset], sub_q_vec);
+                    }
                 } else {
                     q_vec = simd::cast<simd::vec<Q>>(q_vec);
                     simd::store(&quantized_data[i + offset], q_vec);
