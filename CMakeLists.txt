@@ -25,8 +25,8 @@ endif()
 
 add_library(agon::agon ALIAS agon)
 
-# Require C++23 for <stdfloat> support
-target_compile_features(agon PUBLIC cxx_std_23)
+# Require C++20 for concepts
+target_compile_features(agon PUBLIC cxx_std_20)
 
 # Include directories
 target_include_directories(agon
@@ -54,10 +54,6 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             check_cxx_compiler_flag("-mavx512f" COMPILER_SUPPORTS_AVX512F)
             if(COMPILER_SUPPORTS_AVX512F)
                 target_compile_options(agon PUBLIC -mavx512f)
-                check_cxx_compiler_flag("-mavx512fp16" COMPILER_SUPPORTS_AVX512FP16)
-                if(COMPILER_SUPPORTS_AVX512FP16)
-                    target_compile_options(agon PUBLIC -mavx512fp16)
-                endif()
             endif()
         endif()
 

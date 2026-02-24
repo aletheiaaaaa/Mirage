@@ -2,12 +2,6 @@
 
 #include <cstdint>
 
-#if defined(__AVX512_FP16__)
-    #define HAS_FLOAT16 1
-#else
-    #define HAS_FLOAT16 0
-#endif
-
 namespace agon::simd {
     enum class Arch : uint8_t {
         GENERIC,

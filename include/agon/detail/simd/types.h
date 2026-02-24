@@ -2,10 +2,8 @@
 
 #include <cstdint>
 #include <cstddef>
-#include <stdfloat>
 
 #include "arch.h"
-
 #if defined(__AVX512F__)
     #include <immintrin.h>
 #elif defined(__AVX2__)
@@ -28,14 +26,10 @@ namespace agon::simd {
     struct VecI64;
 
     template<Arch arch>
-    struct VecF16;
-
-    template<Arch arch>
     struct VecF32;
 
     template<Arch arch>
     struct VecF64;
-
 #if defined(__AVX512F__)
     template<>
     struct VecI8<Arch::AVX512> {
@@ -76,18 +70,6 @@ namespace agon::simd {
         VecI64() = default;
         explicit VecI64(__m512i val) : data(val) {}
     };
-
-#if HAS_FLOAT16
-    template<>
-    struct VecF16<Arch::AVX512> {
-        using scalar_type = std::float16_t;
-        static constexpr size_t size = 32;
-        __m512h data;
-
-        VecF16() = default;
-        explicit VecF16(__m512h val) : data(val) {}
-    };
-#endif
 
     template<>
     struct VecF32<Arch::AVX512> {
@@ -300,12 +282,6 @@ namespace agon::simd {
     template<Arch arch> struct VecType<float, arch> { using type = VecF32<arch>; };
     template<Arch arch> struct VecType<double, arch> { using type = VecF64<arch>; };
 
-    template<Arch arch> struct VecType<std::float32_t, arch> { using type = VecF32<arch>; };
-    template<Arch arch> struct VecType<std::float64_t, arch> { using type = VecF64<arch>; };
-#if HAS_FLOAT16
-    template<Arch arch> struct VecType<std::float16_t, arch> { using type = VecF16<arch>; };
-#endif
-
     template<typename T>
     using vec = typename VecType<T, CURRENT_ARCH>::type;
 
@@ -313,10 +289,18 @@ namespace agon::simd {
     concept ScalarCastable = std::is_same_v<T, int8_t>
         || std::is_same_v<T, int16_t> || std::is_same_v<T, int32_t>
         || std::is_same_v<T, int64_t> || std::is_same_v<T, float>
-        || std::is_same_v<T, double> || std::is_same_v<T, std::float32_t>
-        || std::is_same_v<T, std::float64_t>
-    #if HAS_FLOAT16
-        || std::is_same_v<T, std::float16_t>
-    #endif
-        ;
+        || std::is_same_v<T, double>;
+
+    template<typename T>
+    struct is_vec : std::false_type {};
+
+    template<Arch arch> struct is_vec<VecI8<arch>> : std::true_type {};
+    template<Arch arch> struct is_vec<VecI16<arch>> : std::true_type {};
+    template<Arch arch> struct is_vec<VecI32<arch>> : std::true_type {};
+    template<Arch arch> struct is_vec<VecI64<arch>> : std::true_type {};
+    template<Arch arch> struct is_vec<VecF32<arch>> : std::true_type {};
+    template<Arch arch> struct is_vec<VecF64<arch>> : std::true_type {};
+
+    template<typename T>
+    concept IsVec = is_vec<T>::value;
 }

@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <concepts>
 #include <stdexcept>
-#include <stdfloat>
 #include <typeinfo>
 
 #include "arch.h"
@@ -13,7 +12,6 @@
 namespace agon::simd {
     template<typename F, typename T>
     concept IsUpcast = 
-        simd::vec<F>::size >= 0 && simd::vec<T>::size >= 0 &&
         simd::vec<F>::size < simd::vec<T>::size;
 
     constexpr size_t UNROLL_FACTOR = 
@@ -27,16 +25,11 @@ namespace agon::simd {
         }(std::make_index_sequence<N>{});
     }
 
-    template<typename F>
-    constexpr void dispatch(const std::type_info& type, F&& func) {
-#if HAS_FLOAT16
-        if (type == typeid(std::float16_t)) {
-            func.template operator()<std::float16_t>();
-        } else
-#endif
-        if (type == typeid(float) || type == typeid(std::float32_t)) {
+    template<typename T, typename F>
+    constexpr void dispatch(F&& func) {
+        if (std::is_same_v<T, float>) {
             func.template operator()<float>();
-        } else if (type == typeid(double) || type == typeid(std::float64_t)) {
+        } else if (std::is_same_v<T, double>) {
             func.template operator()<double>();
         } else {
             throw std::runtime_error("Unsupported data type for SIMD operation");

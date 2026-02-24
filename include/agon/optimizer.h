@@ -1,34 +1,28 @@
 #pragma once
 
 #include "parameter.h"
-#include "detail/simd/arch.h"
 
 #include <variant>
 #include <vector>
 #include <cstdint>
-#include <stdfloat>
 
 namespace agon::optim {
-    struct GradData {
-#if HAS_FLOAT16
-        std::variant<std::vector<std::float16_t>, std::vector<float>, std::vector<double>> data{};
-#else
-        std::variant<std::vector<float>, std::vector<double>> data{};
-#endif
-    };
-
     struct OptimizerState {
         int64_t step = 0;
     };
 
+    template<typename... Ts>
     class Optimizer {
         public:
-            template<typename... Params>
-            explicit Optimizer(Params&... params);
-            explicit Optimizer(std::initializer_list<IParameter*> params);
+            explicit Optimizer(ParameterPack<Ts...> parameters) : parameters_(parameters) {}
 
             void zero_grad();
-            void add_parameter(IParameter& param);
+
+            template<typename T>
+                requires (std::same_as<T, Parameter<typename T::DataType>>)
+            void add_parameter(T& param) {
+                parameters_.template add_parameter(param);
+            }
 
             virtual void step() = 0;
 
@@ -38,6 +32,6 @@ namespace agon::optim {
             ~Optimizer() = default;
         protected:
             OptimizerState state_;
-            std::vector<IParameter*> parameters_;
+            ParameterPack<Ts...> parameters_;
     };
 }

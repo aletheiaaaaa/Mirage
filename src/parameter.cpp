@@ -7,11 +7,7 @@ namespace agon {
     Parameter<T>::Parameter(size_t size) : data_(size), grad_(size, T(0)) {};
 
     template<typename T>
-    template<size_t N>
-    Parameter<T>::Parameter(const std::array<T, N>& data) : data_(data), grad_(data.size(), T(0)) {};
-
-    template<typename T>
-    Parameter<T>::Parameter(const std::vector<T>& data) : data_(data), grad_(data.size(), T(0)) {};
+    Parameter<T>::Parameter(const std::span<T>& data) : data_(data.begin(), data.end()), grad_(data.size(), T(0)) {};
 
     template<typename T>
     std::vector<T>& Parameter<T>::grad() {
@@ -31,31 +27,6 @@ namespace agon {
     template<typename T>
     const std::vector<T>& Parameter<T>::data() const {
         return data_;
-    }
-
-    template<typename T>
-    void* Parameter<T>::grad_ptr() {
-        return static_cast<void*>(grad_.data());
-    }
-
-    template<typename T>
-    const void* Parameter<T>::grad_ptr() const {
-        return static_cast<const void*>(grad_.data());
-    }
-
-    template<typename T>
-    void* Parameter<T>::data_ptr() {
-        return static_cast<void*>(data_.data());
-    }
-
-    template<typename T>
-    const void* Parameter<T>::data_ptr() const {
-        return static_cast<const void*>(data_.data());
-    }
-
-    template<typename T>
-    const std::type_info& Parameter<T>::dtype() const {
-        return typeid(T);
     }
 
     template<typename T>
@@ -99,7 +70,7 @@ namespace agon {
     Quantized<Q, T>::Quantized(size_t size) : Parameter<T>(size), scale_(1.0f), zero_point_(0.0f) {}
 
     template<typename Q, typename T>
-    Quantized<Q, T>::Quantized(const std::vector<Q>& data, float scale, float zero_point)
+    Quantized<Q, T>::Quantized(const std::span<Q>& data, float scale, float zero_point)
         : Parameter<T>(data.size()), scale_(scale), zero_point_(zero_point) {
 
         auto& vals = this->data();
@@ -130,59 +101,6 @@ namespace agon {
         for (; i < data.size(); ++i) {
             vals[i] = scale_cast * (static_cast<T>(data[i]) - zero_point_cast);
         }
-    }
-
-    template<typename Q, typename T>
-    template<size_t N>
-    Quantized<Q, T>::Quantized(const std::array<Q, N>& data, float scale, float zero_point)
-        : Parameter<T>(data.size()), scale_(scale), zero_point_(zero_point) {
-
-        auto& vals = this->data();
-
-        T scale_cast = static_cast<T>(scale);
-        T zero_point_cast = static_cast<T>(zero_point);
-
-        constexpr size_t vec_size = simd::vec<T>::size;
-        constexpr size_t unroll_factor = simd::UNROLL_FACTOR;
-
-        size_t i = 0;
-        for (; i + vec_size * unroll_factor <= data.size(); i += vec_size * unroll_factor) {
-            simd::unroll<unroll_factor>([&]<size_t index>() {
-                constexpr size_t offset = index * vec_size;
-
-                auto q_vec = simd::load<Q>(&data[i + offset]);
-                auto q_float_vec = simd::cast<T>(q_vec);
-                auto scale_vec = simd::set1<T>(scale_cast);
-                auto zero_point_vec = simd::set1<T>(zero_point_cast);
-
-                auto val_vec = simd::sub(q_float_vec, zero_point_vec);
-                val_vec = simd::mul(val_vec, scale_vec);
-                simd::store(&vals[i + offset], val_vec);
-            });
-        }
-
-        for (; i < data.size(); ++i) {
-            vals[i] = scale_cast * (static_cast<T>(data[i]) - zero_point_cast);
-        }
-    }
-
-    template<typename Q, typename T>
-    Quantized<Q, T>::Quantized(const std::vector<T>& data, bool use_affine, bool use_full)
-        : Parameter<T>(data) {
-        T min_val = *std::min_element(data.begin(), data.end());
-        T max_val = *std::max_element(data.begin(), data.end());
-
-        std::tie(scale_, zero_point_) = compute_quant_params_(min_val, max_val, use_affine, use_full);
-    }
-
-    template<typename Q, typename T>
-    template<size_t N>
-    Quantized<Q, T>::Quantized(const std::array<T, N>& data, bool use_affine, bool use_full)
-        : Parameter<T>(data) {
-        T min_val = *std::min_element(data.begin(), data.end());
-        T max_val = *std::max_element(data.begin(), data.end());
-
-        std::tie(scale_, zero_point_) = compute_quant_params_(min_val, max_val, use_affine, use_full);
     }
 
     template<typename Q, typename T>
@@ -274,35 +192,5 @@ namespace agon {
     template<typename Q, typename T>
     float Quantized<Q, T>::zero_point() const {
         return zero_point_;
-    }
-
-    template<typename Q, typename T>
-    const std::type_info& Quantized<Q, T>::quantized_dtype() const {
-        return typeid(Q);
-    }
-
-    template<typename Q, typename T>
-    std::pair<float, float> Quantized<Q, T>::compute_quant_params_(T min, T max, bool use_affine, bool use_full) const {
-        float qmin = static_cast<float>(std::numeric_limits<Q>::min());
-        float qmax = static_cast<float>(std::numeric_limits<Q>::max());
-
-        float tmax, tmin;
-        if (use_full) {
-            tmax = static_cast<float>(std::numeric_limits<T>::max());
-            tmin = static_cast<float>(std::numeric_limits<T>::min());
-        } else {
-            tmax = max;
-            tmin = min;
-        }
-
-        float scale = (tmax - tmin) / (qmax - qmin);
-        float zero_point = 0.0f;
-
-        if (use_affine) {
-            zero_point = qmin - tmin / scale;
-            zero_point = std::round(std::clamp(zero_point, qmin, qmax));
-        }
-
-        return {scale, zero_point};
     }
 }

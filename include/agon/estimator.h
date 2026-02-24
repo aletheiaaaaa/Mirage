@@ -24,6 +24,7 @@ namespace agon::estim {
             virtual void finalize() = 0;
 
             virtual ~Estimator() = default;
+
         protected:
             EstimatorState state_;
             std::vector<IParameter*> parameters_;

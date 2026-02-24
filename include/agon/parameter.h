@@ -6,31 +6,18 @@
 #include <cstddef>
 #include <string>
 #include <typeinfo>
+#include <span>
+
+#include "detail/dedup.h"
 
 namespace agon {
-    class IParameter {
-        public:
-            virtual ~IParameter() = default;
-
-            virtual void* grad_ptr() = 0;
-            virtual const void* grad_ptr() const = 0;
-
-            virtual void* data_ptr() = 0;
-            virtual const void* data_ptr() const = 0;
-
-            virtual const std::type_info& dtype() const = 0;
-
-            virtual size_t size() const = 0;
-            virtual void zero_grad() = 0;
-    };
-
     template<typename T>
-    class Parameter : public IParameter {
+    class Parameter {
         public:
+            using DataType = T;
+
             Parameter(size_t size);
-            Parameter(const std::vector<T>& data);
-            template<size_t N>
-            Parameter(const std::array<T, N>& data);
+            Parameter(const std::span<T>& data);
 
             std::vector<T>& grad();
             const std::vector<T>& grad() const;
@@ -38,20 +25,13 @@ namespace agon {
             std::vector<T>& data();
             const std::vector<T>& data() const;
 
-            void* grad_ptr() override;
-            const void* grad_ptr() const override;
+            size_t size() const;
 
-            void* data_ptr() override;
-            const void* data_ptr() const override;
-
-            const std::type_info& dtype() const override;
-
-            size_t size() const override;
-
-            void zero_grad() override;
+            void zero_grad();
 
             void accumulate(const std::vector<T>& new_grad);
             void update(const std::vector<T>& new_val);
+
         private:
             std::vector<T> data_;
             std::vector<T> grad_;
@@ -60,15 +40,10 @@ namespace agon {
     template<typename Q, typename T>
     class Quantized : public Parameter<T> {
         public:
+            using QuantizedType = Q;
+
             Quantized(size_t size);
-
-            Quantized(const std::vector<Q>& data, float scale = 1.0f, float zero_point = 0.0f);
-            template<size_t N>
-            Quantized(const std::array<Q, N>& data, float scale = 1.0f, float zero_point = 0.0f);
-
-            Quantized(const std::vector<T>& data, bool use_affine = false, bool use_full = false);
-            template<size_t N>
-            Quantized(const std::array<T, N>& data, bool use_affine = false, bool use_full = false);
+            Quantized(const std::span<Q>& data, float scale = 1.0f, float zero_point = 0.0f);
 
             std::vector<Q> quantized() const;
             std::vector<T> fake_quantized() const;
@@ -76,15 +51,25 @@ namespace agon {
             float scale() const;
             float zero_point() const;
 
-            const std::type_info& quantized_dtype() const;
-
         private:
             float scale_ = 1.0f;
             float zero_point_ = 0.0f;
+    };
 
-            bool use_affine_ = false;
-            bool use_full_ = false;
+    template<typename DedupedTuple>
+    struct ParameterPack {
+        dedup::TransformTuple_t<std::vector, DedupedTuple> data{};
 
-            std::pair<float, float> compute_quant_params_(T min, T max, bool use_affine, bool use_full) const;
+        template<typename... Ts>
+            requires (std::same_as<Ts, Parameter<typename Ts::DataType>> && ...)
+        ParameterPack(Ts&... params) {
+            (std::get<std::vector<Ts>>(data).push_back(std::forward<Ts>(params)), ...);
+        }
+
+        template<typename T>
+            requires (std::same_as<T, Parameter<typename T::DataType>>)
+        void add_parameter(T& param) {
+            std::get<std::vector<T>>(data).push_back(std::forward<T>(param));
+        }
     };
 }
