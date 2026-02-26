@@ -40,8 +40,8 @@ namespace agon::optim {
 
             void step() override;
 
-            void load_from_bin(const std::string& path_str);
-            void save_to_bin(const std::string& path_str) const;
+            void load_from_bin(const std::string& path_str) override;
+            void save_to_bin(const std::string& path_str) const override;
 
         private:
             AdamParams options_;
