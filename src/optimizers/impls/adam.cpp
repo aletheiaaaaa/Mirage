@@ -1,4 +1,4 @@
-#include "agon/optimizers/impls/adamm.h"
+#include "agon/optimizers/impls/adam.h"
 
 #include "agon/detail/simd/ops.h"
 #include "agon/detail/simd/utils.h"
@@ -8,7 +8,7 @@
 
 namespace agon::optim {
     template<typename... Ts>
-    void AdaMM<Ts...>::step() {
+    void Adam<Ts...>::step() {
         std::apply([&](auto&... param_vecs) {
             (std::ranges::for_each(param_vecs.begin(), param_vecs.end(), [&](auto& param_ref) {
                 auto& param = param_ref.get();
@@ -75,7 +75,7 @@ namespace agon::optim {
     }
 
     template<typename... Ts>
-    void AdaMM<Ts...>::load_from_bin(const std::string& path_str) {
+    void Adam<Ts...>::load_from_bin(const std::string& path_str) {
         std::filesystem::path path(path_str);
         if (!std::filesystem::exists(path)) throw std::runtime_error("File not found: " + path_str);
 
@@ -99,7 +99,7 @@ namespace agon::optim {
     }
 
     template<typename... Ts>
-    void AdaMM<Ts...>::save_to_bin(const std::string& path_str) const {
+    void Adam<Ts...>::save_to_bin(const std::string& path_str) const {
         std::filesystem::path path(path_str);
         std::ofstream out(path, std::ios::binary);
         if (!out) throw std::runtime_error("Failed to open file: " + path_str);
@@ -120,8 +120,8 @@ namespace agon::optim {
         }, this->parameters_.data);
     }
 
-    template class AdaMM<std::tuple<agon::Parameter<float>>>;
-    template class AdaMM<std::tuple<agon::Parameter<double>>>;
-    template class AdaMM<std::tuple<agon::Parameter<float>, agon::Parameter<double>>>;
-    template class AdaMM<std::tuple<agon::Parameter<double>, agon::Parameter<float>>>;
+    template class Adam<std::tuple<agon::Parameter<float>>>;
+    template class Adam<std::tuple<agon::Parameter<double>>>;
+    template class Adam<std::tuple<agon::Parameter<float>, agon::Parameter<double>>>;
+    template class Adam<std::tuple<agon::Parameter<double>, agon::Parameter<float>>>;
 }

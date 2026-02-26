@@ -5,7 +5,7 @@
 #include "../../detail/simd/utils.h"
 
 namespace agon::optim {
-    struct AdaMMParams {
+    struct AdamParams {
         float lr = 1e-4f;
         float beta1 = 0.9f;
         float beta2 = 0.4f;
@@ -16,15 +16,15 @@ namespace agon::optim {
     };
 
     template<typename DedupedTuple>
-    struct AdaMMState : public OptimizerState {
+    struct AdamState : public OptimizerState {
         dedup::TransformTuple_t<std::vector, dedup::TransformTuple_t<ExtractType_t, DedupedTuple>> momentum{};
         dedup::TransformTuple_t<std::vector, dedup::TransformTuple_t<ExtractType_t, DedupedTuple>> velocity{};
     };
 
     template<typename... Ts>
-    class AdaMM : public Optimizer<Ts...> {
+    class Adam : public Optimizer<Ts...> {
         public:
-            explicit AdaMM(ParameterPack<Ts...> parameters, AdaMMParams options = {})
+            explicit Adam(ParameterPack<Ts...> parameters, AdamParams options = {})
                 : Optimizer<Ts...>(parameters), options_(options) {
                     std::apply([&](auto&... param_vecs) {
                         (std::ranges::for_each(param_vecs.begin(), param_vecs.end(), [&](auto& param_ref) {
@@ -44,7 +44,7 @@ namespace agon::optim {
             void save_to_bin(const std::string& path_str) const;
 
         private:
-            AdaMMParams options_;
-            AdaMMState<Ts...> state_;
+            AdamParams options_;
+            AdamState<Ts...> state_;
     };
 }
