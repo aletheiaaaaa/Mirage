@@ -10,6 +10,7 @@ namespace agon::optim {
         float beta1 = 0.9f;
         float beta2 = 0.4f;
         float epsilon = 1e-8f;
+        float lambda = 0.0f;
 
         bool maximize = false;
         bool use_adazo = false;

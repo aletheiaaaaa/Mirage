@@ -84,7 +84,7 @@ namespace agon {
         }
     };
     template<typename... Ts>
-    ParameterPack(Ts&...) -> ParameterPack<dedup::DeduplicatedPack_t<AsParameter_t<std::decay_t<Ts>>...>>;
+    ParameterPack(Ts&...) -> ParameterPack<dedup::Canonicalized_t<AsParameter_t<std::decay_t<Ts>>...>>;
 
     template<typename T>
     struct ExtractType {};

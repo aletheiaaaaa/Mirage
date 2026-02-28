@@ -39,9 +39,8 @@ namespace agon::optim {
                             return simd::add(simd::sub(grad, prev_grad), prev_update);
                         }();
 
-                        auto lr = simd::set1<T>(options_.lr);
                         auto data = simd::load<T>(&data_full[i + offset]);
-                        data = simd::fmadd(lr, update, data);
+                        data = simd::fmadd(simd::set1<T>(options_.lr), update, data);
 
                         simd::store(&data_full[i + offset], data);
                         simd::store(&prev_grad_full[i + offset], grad);
@@ -70,6 +69,7 @@ namespace agon::optim {
         std::ifstream in(path, std::ios::binary);
         if (!in) throw std::runtime_error("Failed to open file: " + path_str);
 
+        in.read(reinterpret_cast<char*>(&options_), sizeof(options_));
         in.read(reinterpret_cast<char*>(&state_.step), sizeof(state_.step));
 
         std::apply([&](auto&... param_vecs) {
@@ -92,6 +92,7 @@ namespace agon::optim {
         std::ofstream out(path, std::ios::binary);
         if (!out) throw std::runtime_error("Failed to open file: " + path_str);
 
+        out.write(reinterpret_cast<const char*>(&options_), sizeof(options_));
         out.write(reinterpret_cast<const char*>(&state_.step), sizeof(state_.step));
 
         std::apply([&](auto&... param_vecs) {
@@ -111,5 +112,4 @@ namespace agon::optim {
     template class Sarah<std::tuple<Parameter<float>>>;
     template class Sarah<std::tuple<Parameter<double>>>;
     template class Sarah<std::tuple<Parameter<float>, Parameter<double>>>;
-    template class Sarah<std::tuple<Parameter<double>, Parameter<float>>>;
 }

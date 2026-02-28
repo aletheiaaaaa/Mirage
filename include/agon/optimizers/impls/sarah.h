@@ -30,7 +30,9 @@ namespace agon::optim {
                             auto& param = param_ref.get();
                             using T = typename std::unwrap_ref_decay_t<decltype(param)>::DataType;
                             auto& prev_grad = std::get<std::vector<T>>(this->state_.prev_grad);
+                            auto& prev_update = std::get<std::vector<T>>(this->state_.prev_update);
                             prev_grad.insert(prev_grad.end(), param.size(), T(0));
+                            prev_update.insert(prev_update.end(), param.size(), T(0));
                         }), ...);
                     }, this->parameters_.data);
                 }

@@ -45,12 +45,11 @@ namespace agon::optim {
                         simd::store(&mom_full[i + offset], mom);
                         simd::store(&vel_full[i + offset], vel);
 
-                        auto epsilon = simd::set1<T>(options_.epsilon);
-                        auto update = simd::div(mom, simd::add(simd::sqrt(vel), epsilon));
-
-                        auto lr = simd::set1<T>(options_.lr);
+                        auto update = simd::div(mom, simd::add(simd::sqrt(vel), simd::set1<T>(options_.epsilon)));
                         auto data = simd::load<T>(&data_full[i + offset]);
-                        data = simd::fmadd(lr, update, data);
+
+                        if (options_.lambda) update = simd::fmadd(simd::set1<T>(options_.lambda), data, update);
+                        data = simd::fmadd(simd::set1<T>(options_.lr), update, data);
                         simd::store(&data_full[i + offset], data);
                     });
                 }
@@ -81,6 +80,7 @@ namespace agon::optim {
         std::ifstream in(path, std::ios::binary);
         if (!in) throw std::runtime_error("Failed to open file: " + path_str);
 
+        in.read(reinterpret_cast<char*>(&options_), sizeof(options_));
         in.read(reinterpret_cast<char*>(&state_.step), sizeof(state_.step));
 
         std::apply([&](auto&... param_vecs) {
@@ -103,6 +103,7 @@ namespace agon::optim {
         std::ofstream out(path, std::ios::binary);
         if (!out) throw std::runtime_error("Failed to open file: " + path_str);
 
+        out.write(reinterpret_cast<const char*>(&options_), sizeof(options_));
         out.write(reinterpret_cast<const char*>(&state_.step), sizeof(state_.step));
 
         std::apply([&](auto&... param_vecs) {
@@ -122,5 +123,4 @@ namespace agon::optim {
     template class Adam<std::tuple<agon::Parameter<float>>>;
     template class Adam<std::tuple<agon::Parameter<double>>>;
     template class Adam<std::tuple<agon::Parameter<float>, agon::Parameter<double>>>;
-    template class Adam<std::tuple<agon::Parameter<double>, agon::Parameter<float>>>;
 }

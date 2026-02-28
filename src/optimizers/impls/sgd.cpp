@@ -37,10 +37,8 @@ namespace agon::optim {
 
                         if (options_.nesterov) mom = simd::fmadd(mom_coeff, mom, grad);
 
-                        auto lr = simd::set1<T>(options_.lr);
-
                         auto data = simd::load<T>(&data_full[i + offset]);
-                        data = simd::fmadd(lr, mom, data);
+                        data = simd::fmadd(simd::set1<T>(options_.lr), mom, data);
                         simd::store(&data_full[i + offset], data);
                     });
                 }
@@ -64,10 +62,11 @@ namespace agon::optim {
         std::filesystem::path path(path_str);
         if (!std::filesystem::exists(path)) throw std::runtime_error("File not found: " + path_str);
 
-        std::ifstream file(path, std::ios::binary);
-        if (!file) throw std::runtime_error("Failed to open file: " + path_str);
+        std::ifstream in(path, std::ios::binary);
+        if (!in) throw std::runtime_error("Failed to open file: " + path_str);
 
-        file.read(reinterpret_cast<char*>(&state_.step), sizeof(state_.step));
+        in.read(reinterpret_cast<char*>(&options_), sizeof(options_));
+        in.read(reinterpret_cast<char*>(&state_.step), sizeof(state_.step));
 
         std::apply([&](auto&... param_vecs) {
             (std::ranges::for_each(param_vecs, [&](auto& param_ref) {
@@ -75,8 +74,8 @@ namespace agon::optim {
                 using T = typename std::unwrap_ref_decay_t<decltype(param)>::DataType;
                 auto& mom = std::get<std::vector<T>>(state_.momenta);
 
-                file.read(reinterpret_cast<char*>(&param.data()), param.size() * sizeof(T));
-                file.read(reinterpret_cast<char*>(mom.data()), param.size() * sizeof(T));
+                in.read(reinterpret_cast<char*>(&param.data()), param.size() * sizeof(T));
+                in.read(reinterpret_cast<char*>(mom.data()), param.size() * sizeof(T));
             }), ...);
         }, this->parameters_.data);
     }
@@ -84,10 +83,11 @@ namespace agon::optim {
     template<typename... Ts>
     void SGD<Ts...>::save_to_bin(const std::string& path_str) const {
         std::filesystem::path path(path_str);
-        std::ofstream file(path, std::ios::binary);
-        if (!file) throw std::runtime_error("Failed to open file: " + path_str);
+        std::ofstream out(path, std::ios::binary);
+        if (!out) throw std::runtime_error("Failed to open file: " + path_str);
 
-        file.write(reinterpret_cast<const char*>(&state_.step), sizeof(state_.step));
+        out.write(reinterpret_cast<const char*>(&options_), sizeof(options_));
+        out.write(reinterpret_cast<const char*>(&state_.step), sizeof(state_.step));
 
         std::apply([&](auto&... param_vecs) {
             (std::ranges::for_each(param_vecs, [&](auto& param_ref) {
@@ -95,8 +95,8 @@ namespace agon::optim {
                 using T = typename std::unwrap_ref_decay_t<decltype(param)>::DataType;
                 auto& mom = std::get<std::vector<T>>(state_.momenta);
 
-                file.write(reinterpret_cast<const char*>(&param.data()), param.size() * sizeof(T));
-                file.write(reinterpret_cast<const char*>(mom.data()), param.size() * sizeof(T));
+                out.write(reinterpret_cast<const char*>(&param.data()), param.size() * sizeof(T));
+                out.write(reinterpret_cast<const char*>(mom.data()), param.size() * sizeof(T));
             }), ...);
         }, this->parameters_.data);
     }
@@ -104,5 +104,4 @@ namespace agon::optim {
     template class SGD<std::tuple<agon::Parameter<float>>>;
     template class SGD<std::tuple<agon::Parameter<double>>>;
     template class SGD<std::tuple<agon::Parameter<float>, agon::Parameter<double>>>;
-    template class SGD<std::tuple<agon::Parameter<double>, agon::Parameter<float>>>;
 }
