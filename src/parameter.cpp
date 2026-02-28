@@ -90,23 +90,30 @@ namespace agon {
         T scale_cast = static_cast<T>(scale);
         T zero_point_cast = static_cast<T>(zero_point);
 
-        constexpr size_t vec_size = simd::vec<T>::size;
-        constexpr size_t unroll_factor = simd::UNROLL_FACTOR;
+        constexpr size_t q_vec_size = simd::vec<Q>::size;
+        constexpr size_t f_vec_size = simd::vec<T>::size;
+        constexpr size_t unroll_factor = std::max(simd::UNROLL_FACTOR / 2, 1);
+        constexpr size_t slice_idx = q_vec_size / f_vec_size;
 
         size_t i = 0;
-        for (; i + vec_size * unroll_factor <= data.size(); i += vec_size * unroll_factor) {
+        for (; i + q_vec_size * unroll_factor <= data.size(); i += q_vec_size * unroll_factor) {
             simd::unroll<unroll_factor>([&]<size_t index>() {
-                constexpr size_t offset = index * vec_size;
+                constexpr size_t offset0 = index * q_vec_size;
 
-                auto q_vec = simd::load<Q>(&data[i + offset]);
-                auto q_float_vec = simd::cast<T>(q_vec);
                 auto scale_vec = simd::set1<T>(scale_cast);
                 auto zero_point_vec = simd::set1<T>(zero_point_cast);
 
-                auto val_vec = simd::sub(q_float_vec, zero_point_vec);
-                val_vec = simd::mul(val_vec, scale_vec);
+                auto q_vec = simd::load<Q>(&data[i + offset0]);
+                simd::unroll<slice_idx>([&]<size_t slice>() {
+                    constexpr size_t offset1 = slice * f_vec_size;
 
-                simd::store(&vals[i + offset], val_vec);
+                    auto q_float_vec = simd::cast<T, slice>(q_vec);
+
+                    auto val_vec = simd::sub(q_float_vec, zero_point_vec);
+                    val_vec = simd::mul(val_vec, scale_vec);
+
+                    simd::store(&vals[i + offset0 + offset1], val_vec);
+                });
             });
         }
 
@@ -202,8 +209,8 @@ namespace agon {
     template class Parameter<float>;
     template class Parameter<double>;
 
-    template class Quantized<int8_t,  float>;
+    template class Quantized<int8_t, float>;
     template class Quantized<int16_t, float>;
-    template class Quantized<int8_t,  double>;
+    template class Quantized<int8_t, double>;
     template class Quantized<int16_t, double>;
 }

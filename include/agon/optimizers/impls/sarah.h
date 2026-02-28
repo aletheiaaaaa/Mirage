@@ -5,23 +5,25 @@
 #include <algorithm>
 
 namespace agon::optim {
-    struct SpiderParams {
+    struct SarahParams {
         float lr = 0.01f;
-        int bootstrap_interval = 64;
+
+        bool recompute = false;
+        int recompute_interval = 0;
 
         bool maximize = false;
     };
 
     template<typename DedupedTuple>
-    struct SpiderState : public OptimizerState {
+    struct SarahState : public OptimizerState {
         dedup::TransformTuple_t<std::vector, dedup::TransformTuple_t<ExtractType_t, DedupedTuple>> prev_grad{};
         dedup::TransformTuple_t<std::vector, dedup::TransformTuple_t<ExtractType_t, DedupedTuple>> prev_update{};
     };
 
     template<typename... Ts>
-    class Spider : public Optimizer<Ts...> {
+    class Sarah : public Optimizer<Ts...> {
         public:
-            explicit Spider(ParameterPack<Ts...> parameters, SpiderParams options = {})
+            explicit Sarah(ParameterPack<Ts...> parameters, SarahParams options = {})
                 : Optimizer<Ts...>(parameters), options_(options) {
                     std::apply([&](auto&... param_vecs) {
                         (std::ranges::for_each(param_vecs, [&](auto& param_ref) {
@@ -39,7 +41,7 @@ namespace agon::optim {
             void save_to_bin(const std::string& path_str) const override;
 
         private:
-            SpiderParams options_;
-            SpiderState<Ts...> state_;
+            SarahParams options_;
+            SarahState<Ts...> state_;
     };
 }

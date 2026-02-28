@@ -39,7 +39,7 @@ namespace agon {
             std::vector<T> grad_;
     };
 
-    template<typename Q, typename T>
+    template<typename Q, typename T = float>
         requires (std::is_same_v<Q, int16_t> || std::is_same_v<Q, int8_t>) && std::is_floating_point_v<T>
     class Quantized : public Parameter<T> {
         public:
