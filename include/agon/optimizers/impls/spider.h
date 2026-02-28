@@ -6,12 +6,16 @@
 
 namespace agon::optim {
     struct SpiderParams {
+        float lr = 0.01f;
+        int bootstrap_interval = 64;
+
         bool maximize = false;
     };
 
     template<typename DedupedTuple>
     struct SpiderState : public OptimizerState {
         dedup::TransformTuple_t<std::vector, dedup::TransformTuple_t<ExtractType_t, DedupedTuple>> prev_grad{};
+        dedup::TransformTuple_t<std::vector, dedup::TransformTuple_t<ExtractType_t, DedupedTuple>> prev_update{};
     };
 
     template<typename... Ts>

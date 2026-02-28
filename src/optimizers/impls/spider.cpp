@@ -16,7 +16,8 @@ namespace agon::optim {
 
                 auto& grad_full = param.grad();
                 auto& data_full = param.data();
-                auto& prev_full = std::get<std::vector<T>>(state_.prev_grad);
+                auto& prev_grad_full = std::get<std::vector<T>>(state_.prev_grad);
+                auto& prev_update_full = std::get<std::vector<T>>(state_.prev_update);
 
                 constexpr size_t vec_size = simd::vec<T>::size;
                 constexpr size_t unroll_factor = simd::UNROLL_FACTOR;
@@ -27,25 +28,33 @@ namespace agon::optim {
                         constexpr size_t offset = index * vec_size;
 
                         auto grad = simd::load<T>(&grad_full[i + offset]);
-                        auto prev_grad = simd::load<T>(&prev_full[i + offset]);
-
                         if (options_.maximize) grad = simd::neg(grad);
 
-                        auto update = simd::sub(grad, prev_grad);
+                        auto update = [&](){
+                            if (state_.step % options_.bootstrap_interval == 0) return grad;
+
+                            auto prev_grad = simd::load<T>(&prev_grad_full[i + offset]);
+                            auto prev_update = simd::load<T>(&prev_update_full[i + offset]);
+
+                            return simd::add(simd::sub(grad, prev_grad), prev_update);
+                        }();
+
+                        auto lr = simd::set1<T>(options_.lr);
                         auto data = simd::load<T>(&data_full[i + offset]);
-                        data = simd::add(update, data);
+                        data = simd::fmadd(lr, update, data);
 
                         simd::store(&data_full[i + offset], data);
-                        simd::store(&prev_full[i + offset], grad);
+                        simd::store(&prev_grad_full[i + offset], grad);
                     });
                 }
 
                 for (; i < grad_full.size(); ++i) {
                     T grad = options_.maximize ? -grad_full[i] : grad_full[i];
-                    T update = grad - prev_full[i];
+                    T update = (state_.step % options_.bootstrap_interval == 0) 
+                        ? grad : grad - prev_grad_full[i] + prev_update_full[i];
 
-                    data_full[i] += update;
-                    prev_full[i] = grad;
+                    data_full[i] += options_.lr * update;
+                    prev_grad_full[i] = grad;
                 }
             }), ...);
         }, this->parameters_.data);

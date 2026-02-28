@@ -42,8 +42,8 @@ namespace agon::optim {
                         vel = simd::fmadd(beta2, vel, grad_squared);
                         vel = simd::fnmadd(beta2, grad_squared, vel);
 
-                        simd::store(&mom[i + offset], mom);
-                        simd::store(&vel[i + offset], vel);
+                        simd::store(&mom_full[i + offset], mom);
+                        simd::store(&vel_full[i + offset], vel);
 
                         auto epsilon = simd::set1<T>(options_.epsilon);
                         auto update = simd::div(mom, simd::add(simd::sqrt(vel), epsilon));
