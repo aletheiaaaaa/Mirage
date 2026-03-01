@@ -15,6 +15,7 @@
 
 namespace agon::simd {
   template<typename T, size_t N = 0, typename F>
+    requires IsOperable<T> && IsOperable<F>
   inline Vec<CURRENT_ARCH, T> cast(Vec<CURRENT_ARCH, F> v);
 
 #if defined(__AVX512F__)
@@ -27,6 +28,10 @@ namespace agon::simd {
       if constexpr (std::is_same_v<T, int16_t>) {
         __m256i chunk = _mm512_extracti64x4_epi64(v.data, N);
         return Vec<CURRENT_ARCH, T>(_mm512_cvtepi8_epi16(chunk));
+
+      } else if constexpr (std::is_same_v<T, int32_t>) {
+        __m128i chunk = _mm512_extracti32x4_epi32(v.data, N);
+        return Vec<CURRENT_ARCH, T>(_mm512_cvtepi8_epi32(chunk));
 
       } else if constexpr (std::is_same_v<T, float>) {
         __m128i chunk = _mm512_extracti32x4_epi32(v.data, N);
@@ -44,7 +49,11 @@ namespace agon::simd {
     }
 
     else if constexpr (std::is_same_v<F, int16_t>) {
-      if constexpr (std::is_same_v<T, float>) {
+      if constexpr (std::is_same_v<T, int32_t>) {
+        __m256i chunk = _mm512_extracti64x4_epi64(v.data, N);
+        return Vec<CURRENT_ARCH, T>(_mm512_cvtepi16_epi32(chunk));
+
+      } else if constexpr (std::is_same_v<T, float>) {
         __m256i chunk = _mm512_extracti64x4_epi64(v.data, N);
         return Vec<CURRENT_ARCH, T>(_mm512_cvtepi32_ps(_mm512_cvtepi16_epi32(chunk)));
 
@@ -63,7 +72,10 @@ namespace agon::simd {
     }
 
     else if constexpr (std::is_same_v<F, float>) {
-      if constexpr (std::is_same_v<T, double>) {
+      if constexpr (std::is_same_v<T, int32_t>) {
+        return Vec<CURRENT_ARCH, T>(_mm512_cvtps_epi32(v.data));
+
+      } else if constexpr (std::is_same_v<T, double>) {
         __m256 chunk = (N == 0) ? _mm512_castps512_ps256(v.data) : _mm512_extractf32x8_ps(v.data, 1);
         return Vec<CURRENT_ARCH, T>(_mm512_cvtps_pd(chunk));
 
@@ -82,8 +94,33 @@ namespace agon::simd {
       }
     }
 
+    else if constexpr (std::is_same_v<F, int32_t>) {
+      if constexpr (std::is_same_v<T, int8_t>) {
+        __m128i narrow = _mm512_cvtepi32_epi8(v.data);
+        return Vec<CURRENT_ARCH, T>(_mm512_castsi128_si512(narrow));
+
+      } else if constexpr (std::is_same_v<T, int16_t>) {
+        __m256i narrow = _mm512_cvtepi32_epi16(v.data);
+        return Vec<CURRENT_ARCH, T>(_mm512_castsi256_si512(narrow));
+
+      } else if constexpr (std::is_same_v<T, float>) {
+        return Vec<CURRENT_ARCH, T>(_mm512_cvtepi32_ps(v.data));
+
+      } else if constexpr (std::is_same_v<T, double>) {
+        __m256i chunk = (N == 0) ? _mm512_castsi512_si256(v.data) : _mm512_extracti64x4_epi64(v.data, 1);
+        return Vec<CURRENT_ARCH, T>(_mm512_cvtepi32_pd(chunk));
+
+      } else {
+        static_assert(std::is_same_v<T, void>, "Unsupported cast from int32_t on AVX512");
+      }
+    }
+
     else if constexpr (std::is_same_v<F, double>) {
-      if constexpr (std::is_same_v<T, float>) {
+      if constexpr (std::is_same_v<T, int32_t>) {
+        __m256i narrow = _mm512_cvtpd_epi32(v.data);
+        return Vec<CURRENT_ARCH, T>(_mm512_castsi256_si512(narrow));
+
+      } else if constexpr (std::is_same_v<T, float>) {
         __m256 narrow = _mm512_cvtpd_ps(v.data);
         return Vec<CURRENT_ARCH, T>(_mm512_castps256_ps512(narrow));
 
@@ -117,6 +154,11 @@ namespace agon::simd {
         __m128i chunk = _mm256_extracti128_si256(v.data, N);
         return Vec<CURRENT_ARCH, T>(_mm256_cvtepi8_epi16(chunk));
 
+      } else if constexpr (std::is_same_v<T, int32_t>) {
+        __m128i lane = _mm256_extracti128_si256(v.data, N / 2);
+        __m128i chunk = (N % 2 == 0) ? lane : _mm_srli_si128(lane, 8);
+        return Vec<CURRENT_ARCH, T>(_mm256_cvtepi8_epi32(chunk));
+
       } else if constexpr (std::is_same_v<T, float>) {
         __m128i lane = _mm256_extracti128_si256(v.data, N / 2);
         __m128i chunk = (N % 2 == 0) ? lane : _mm_srli_si128(lane, 8);
@@ -134,7 +176,11 @@ namespace agon::simd {
     }
 
     else if constexpr (std::is_same_v<F, int16_t>) {
-      if constexpr (std::is_same_v<T, float>) {
+      if constexpr (std::is_same_v<T, int32_t>) {
+        __m128i chunk = _mm256_extracti128_si256(v.data, N);
+        return Vec<CURRENT_ARCH, T>(_mm256_cvtepi16_epi32(chunk));
+
+      } else if constexpr (std::is_same_v<T, float>) {
         __m128i chunk = _mm256_extracti128_si256(v.data, N);
         return Vec<CURRENT_ARCH, T>(_mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(chunk)));
 
@@ -158,7 +204,10 @@ namespace agon::simd {
     }
 
     else if constexpr (std::is_same_v<F, float>) {
-      if constexpr (std::is_same_v<T, double>) {
+      if constexpr (std::is_same_v<T, int32_t>) {
+        return Vec<CURRENT_ARCH, T>(_mm256_cvtps_epi32(v.data));
+
+      } else if constexpr (std::is_same_v<T, double>) {
         __m128 chunk = (N == 0) ? _mm256_castps256_ps128(v.data) : _mm256_extractf128_ps(v.data, 1);
         return Vec<CURRENT_ARCH, T>(_mm256_cvtps_pd(chunk));
 
@@ -187,8 +236,43 @@ namespace agon::simd {
       }
     }
 
+    else if constexpr (std::is_same_v<F, int32_t>) {
+      if constexpr (std::is_same_v<T, int8_t>) {
+        __m128i lo = _mm256_castsi256_si128(v.data);
+        __m128i hi = _mm256_extracti128_si256(v.data, 1);
+        __m128i shuf = _mm_set_epi8(
+          -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 12, 8, 4, 0
+        );
+        lo = _mm_shuffle_epi8(lo, shuf);
+        hi = _mm_shuffle_epi8(hi, shuf);
+        return Vec<CURRENT_ARCH, T>(_mm256_castsi128_si256(_mm_unpacklo_epi32(lo, hi)));
+
+      } else if constexpr (std::is_same_v<T, int16_t>) {
+        __m256i shuf = _mm256_set_epi8(
+          -1, -1, -1, -1, -1, -1, -1, -1, 13, 12, 9, 8, 5, 4, 1, 0,
+          -1, -1, -1, -1, -1, -1, -1, -1, 13, 12, 9, 8, 5, 4, 1, 0
+        );
+        __m256i shuffled = _mm256_shuffle_epi8(v.data, shuf);
+        return Vec<CURRENT_ARCH, T>(_mm256_permute4x64_epi64(shuffled, _MM_SHUFFLE(3, 3, 2, 0)));
+
+      } else if constexpr (std::is_same_v<T, float>) {
+        return Vec<CURRENT_ARCH, T>(_mm256_cvtepi32_ps(v.data));
+
+      } else if constexpr (std::is_same_v<T, double>) {
+        __m128i chunk = (N == 0) ? _mm256_castsi256_si128(v.data) : _mm256_extracti128_si256(v.data, 1);
+        return Vec<CURRENT_ARCH, T>(_mm256_cvtepi32_pd(chunk));
+
+      } else {
+        static_assert(std::is_same_v<T, void>, "Unsupported cast from int32_t on AVX2");
+      }
+    }
+
     else if constexpr (std::is_same_v<F, double>) {
-      if constexpr (std::is_same_v<T, float>) {
+      if constexpr (std::is_same_v<T, int32_t>) {
+        __m128i narrow = _mm256_cvtpd_epi32(v.data);
+        return Vec<CURRENT_ARCH, T>(_mm256_castsi128_si256(narrow));
+
+      } else if constexpr (std::is_same_v<T, float>) {
         __m128 narrow = _mm256_cvtpd_ps(v.data);
         return Vec<CURRENT_ARCH, T>(_mm256_castps128_ps256(narrow));
 
@@ -225,6 +309,9 @@ namespace agon::simd {
       if constexpr (std::is_same_v<T, int16_t>) {
         __m128i chunk = (N == 0) ? v.data : _mm_srli_si128(v.data, 8);
         return Vec<CURRENT_ARCH, T>(_mm_cvtepi8_epi16(chunk));
+      } else if constexpr (std::is_same_v<T, int32_t>) {
+        __m128i chunk = _mm_srli_si128(v.data, N * 4);
+        return Vec<CURRENT_ARCH, T>(_mm_cvtepi8_epi32(chunk));
       } else if constexpr (std::is_same_v<T, float>) {
         __m128i chunk = _mm_srli_si128(v.data, N * 4);
         return Vec<CURRENT_ARCH, T>(_mm_cvtepi32_ps(_mm_cvtepi8_epi32(chunk)));
@@ -237,7 +324,10 @@ namespace agon::simd {
     }
 
     else if constexpr (std::is_same_v<F, int16_t>) {
-      if constexpr (std::is_same_v<T, float>) {
+      if constexpr (std::is_same_v<T, int32_t>) {
+        __m128i chunk = (N == 0) ? v.data : _mm_srli_si128(v.data, 8);
+        return Vec<CURRENT_ARCH, T>(_mm_cvtepi16_epi32(chunk));
+      } else if constexpr (std::is_same_v<T, float>) {
         __m128i chunk = (N == 0) ? v.data : _mm_srli_si128(v.data, 8);
         return Vec<CURRENT_ARCH, T>(_mm_cvtepi32_ps(_mm_cvtepi16_epi32(chunk)));
       } else if constexpr (std::is_same_v<T, double>) {
@@ -254,7 +344,9 @@ namespace agon::simd {
     }
 
     else if constexpr (std::is_same_v<F, float>) {
-      if constexpr (std::is_same_v<T, double>) {
+      if constexpr (std::is_same_v<T, int32_t>) {
+        return Vec<CURRENT_ARCH, T>(_mm_cvtps_epi32(v.data));
+      } else if constexpr (std::is_same_v<T, double>) {
         __m128 chunk = (N == 0) ? v.data : _mm_castsi128_ps(_mm_srli_si128(_mm_castps_si128(v.data), 8));
         return Vec<CURRENT_ARCH, T>(_mm_cvtps_pd(chunk));
       } else if constexpr (std::is_same_v<T, int16_t>) {
@@ -274,8 +366,31 @@ namespace agon::simd {
       }
     }
 
+    else if constexpr (std::is_same_v<F, int32_t>) {
+      if constexpr (std::is_same_v<T, int8_t>) {
+        __m128i shuf = _mm_set_epi8(
+          -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 12, 8, 4, 0
+        );
+        return Vec<CURRENT_ARCH, T>(_mm_shuffle_epi8(v.data, shuf));
+      } else if constexpr (std::is_same_v<T, int16_t>) {
+        __m128i shuf = _mm_set_epi8(
+          -1, -1, -1, -1, -1, -1, -1, -1, 13, 12, 9, 8, 5, 4, 1, 0
+        );
+        return Vec<CURRENT_ARCH, T>(_mm_shuffle_epi8(v.data, shuf));
+      } else if constexpr (std::is_same_v<T, float>) {
+        return Vec<CURRENT_ARCH, T>(_mm_cvtepi32_ps(v.data));
+      } else if constexpr (std::is_same_v<T, double>) {
+        __m128i chunk = (N == 0) ? v.data : _mm_srli_si128(v.data, 8);
+        return Vec<CURRENT_ARCH, T>(_mm_cvtepi32_pd(chunk));
+      } else {
+        static_assert(std::is_same_v<T, void>, "Unsupported cast from int32_t on SSE4_1");
+      }
+    }
+
     else if constexpr (std::is_same_v<F, double>) {
-      if constexpr (std::is_same_v<T, float>) {
+      if constexpr (std::is_same_v<T, int32_t>) {
+        return Vec<CURRENT_ARCH, T>(_mm_cvtpd_epi32(v.data));
+      } else if constexpr (std::is_same_v<T, float>) {
         return Vec<CURRENT_ARCH, T>(_mm_cvtpd_ps(v.data));
       } else if constexpr (std::is_same_v<T, int16_t>) {
         __m128i i32 = _mm_cvtpd_epi32(v.data);
@@ -306,6 +421,8 @@ namespace agon::simd {
     if constexpr (std::is_same_v<F, int8_t>) {
       if constexpr (std::is_same_v<T, int16_t>) {
         return Vec<CURRENT_ARCH, T>(static_cast<int16_t>(v.data));
+      } else if constexpr (std::is_same_v<T, int32_t>) {
+        return Vec<CURRENT_ARCH, T>(static_cast<int32_t>(v.data));
       } else if constexpr (std::is_same_v<T, float>) {
         return Vec<CURRENT_ARCH, T>(static_cast<float>(v.data));
       } else if constexpr (std::is_same_v<T, double>) {
@@ -315,7 +432,9 @@ namespace agon::simd {
       }
     }
     else if constexpr (std::is_same_v<F, int16_t>) {
-      if constexpr (std::is_same_v<T, float>) {
+      if constexpr (std::is_same_v<T, int32_t>) {
+        return Vec<CURRENT_ARCH, T>(static_cast<int32_t>(v.data));
+      } else if constexpr (std::is_same_v<T, float>) {
         return Vec<CURRENT_ARCH, T>(static_cast<float>(v.data));
       } else if constexpr (std::is_same_v<T, double>) {
         return Vec<CURRENT_ARCH, T>(static_cast<double>(v.data));
@@ -325,8 +444,23 @@ namespace agon::simd {
         static_assert(std::is_same_v<T, void>, "Unsupported cast from int16_t on GENERIC");
       }
     }
+    else if constexpr (std::is_same_v<F, int32_t>) {
+      if constexpr (std::is_same_v<T, int8_t>) {
+        return Vec<CURRENT_ARCH, T>(static_cast<int8_t>(v.data));
+      } else if constexpr (std::is_same_v<T, int16_t>) {
+        return Vec<CURRENT_ARCH, T>(static_cast<int16_t>(v.data));
+      } else if constexpr (std::is_same_v<T, float>) {
+        return Vec<CURRENT_ARCH, T>(static_cast<float>(v.data));
+      } else if constexpr (std::is_same_v<T, double>) {
+        return Vec<CURRENT_ARCH, T>(static_cast<double>(v.data));
+      } else {
+        static_assert(std::is_same_v<T, void>, "Unsupported cast from int32_t on GENERIC");
+      }
+    }
     else if constexpr (std::is_same_v<F, float>) {
-      if constexpr (std::is_same_v<T, double>) {
+      if constexpr (std::is_same_v<T, int32_t>) {
+        return Vec<CURRENT_ARCH, T>(static_cast<int32_t>(std::lround(v.data)));
+      } else if constexpr (std::is_same_v<T, double>) {
         return Vec<CURRENT_ARCH, T>(static_cast<double>(v.data));
       } else if constexpr (std::is_same_v<T, int16_t>) {
         return Vec<CURRENT_ARCH, T>(static_cast<int16_t>(std::lround(v.data)));
@@ -337,7 +471,9 @@ namespace agon::simd {
       }
     }
     else if constexpr (std::is_same_v<F, double>) {
-      if constexpr (std::is_same_v<T, float>) {
+      if constexpr (std::is_same_v<T, int32_t>) {
+        return Vec<CURRENT_ARCH, T>(static_cast<int32_t>(std::lround(v.data)));
+      } else if constexpr (std::is_same_v<T, float>) {
         return Vec<CURRENT_ARCH, T>(static_cast<float>(v.data));
       } else if constexpr (std::is_same_v<T, int16_t>) {
         return Vec<CURRENT_ARCH, T>(static_cast<int16_t>(std::lround(v.data)));

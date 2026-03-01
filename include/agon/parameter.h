@@ -18,13 +18,9 @@
 #include "detail/simd/utils.h"
 #include "detail/simd/ops.h"
 #include "detail/dedup.h"
-#include "detail/flatten.h"
+#include "detail/unpack.h"
 
 namespace agon {
-  template<typename T>
-    requires std::is_floating_point_v<T>
-  struct View;
-
   struct Slice {
     static constexpr size_t Start = 0;
     static constexpr size_t End = std::numeric_limits<size_t>::max();
@@ -74,6 +70,143 @@ namespace agon {
 
   template<typename T>
     requires std::is_floating_point_v<T>
+  class Parameter;
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  struct View {
+    using is_param_like = std::true_type;
+    using DataType = T;
+
+    std::reference_wrapper<Parameter<std::remove_const_t<T>>> ref;
+    size_t offset;
+    std::vector<size_t> shape;
+    std::vector<size_t> strides;
+
+    template<typename... Args>
+      requires (std::convertible_to<Args, Slice> && ...)
+    View<T> operator[](Args... args) {
+      std::array<Slice, sizeof...(Args)> slices{args...};
+
+      auto params = detail::compute_view(slices, shape, strides);
+      return View<T>{
+        .ref = ref,
+        .offset = offset + params.offset,
+        .shape = std::move(params.shape),
+        .strides = std::move(params.strides)
+      };
+    }
+
+    template<typename... Args>
+      requires (std::convertible_to<Args, Slice> && ...)
+    const View<const T> operator[](Args... args) const {
+      std::array<Slice, sizeof...(Args)> slices{args...};
+
+      auto params = detail::compute_view(slices, shape, strides);
+      return View<const T>{
+        .ref = std::cref(ref.get()),
+        .offset = offset + params.offset,
+        .shape = std::move(params.shape),
+        .strides = std::move(params.strides)
+      };
+    }
+
+    std::vector<T> materialize() const {
+      std::vector<T> result(numel());
+
+      constexpr size_t vec_size = simd::vec<T>::size;
+      const size_t unroll_factor = simd::UNROLL_FACTOR;
+
+      std::vector<int> idx(numel(), 0);
+      std::vector<int> coord(shape.size(), 0);
+
+      size_t current_idx = offset;
+      for (size_t i = 0; i < numel(); ++i) {
+        idx[i] = current_idx;
+
+        for (size_t d = shape.size(); d-- > 0; ) {
+          coord[d]++;
+          current_idx += strides[d];
+
+          if (coord[d] < shape[d]) break;
+
+          coord[d] = 0;
+          current_idx -= shape[d] * strides[d]; 
+        }
+      }
+
+      for (int i = 0; i + vec_size * unroll_factor <= result.size(); i += vec_size * unroll_factor) {
+        simd::unroll<unroll_factor>([&]<size_t index>() {
+          constexpr size_t off = index * vec_size;
+
+          auto indices = simd::load<int32_t>(&idx[off]);
+          auto vals = simd::gather<T>(&data()[0], indices);
+          simd::store(&result[off], vals);
+        });
+      }
+
+      return result;
+    }
+
+    void fill(const std::span<T>& new_data) {
+      assert(new_data.size() == numel() && "Data size does not match view size");
+
+      constexpr size_t vec_size = simd::vec<T>::size;
+      const size_t unroll_factor = simd::UNROLL_FACTOR;
+
+      std::vector<int> idx(numel(), 0);
+      std::vector<int> coord(shape.size(), 0);
+
+      size_t current_idx = offset;
+      for (size_t i = 0; i < numel(); ++i) {
+        idx[i] = current_idx;
+
+        for (size_t d = shape.size(); d-- > 0; ) {
+          coord[d]++;
+          current_idx += strides[d];
+
+          if (coord[d] < shape[d]) break;
+
+          coord[d] = 0;
+          current_idx -= shape[d] * strides[d]; 
+        }
+      }
+
+      for (int i = 0; i + vec_size * unroll_factor <= new_data.size(); i += vec_size * unroll_factor) {
+        simd::unroll<unroll_factor>([&]<size_t index>() {
+          constexpr size_t off = index * vec_size;
+
+          auto vals = simd::load<T>(&new_data[off]);
+          auto indices = simd::load<int32_t>(&idx[off]);
+          simd::scatter(&data()[0], indices, vals);
+        });
+      }
+    }
+
+    std::vector<T>& grad() { return ref.get().grad(); }
+    const std::vector<T>& grad() const { return ref.get().grad(); }
+
+    std::vector<T>& data() { return ref.get().data(); }
+    const std::vector<T>& data() const { return ref.get().data(); }
+
+    size_t rank() const { return shape.size(); }
+
+    size_t numel() const {
+      return std::accumulate(shape.begin(), shape.end(), size_t{1}, std::multiplies<size_t>{});
+    }
+
+    bool is_contiguous() const {
+      size_t expected_stride = 1;
+      for (size_t i = shape.size(); i-- > 0; ) {
+        if (strides[i] != expected_stride) return false;
+        expected_stride *= shape[i];
+      }
+      return true;
+    }
+  };
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
   class Parameter {
     public:
       using is_param_like = std::true_type;
@@ -88,6 +221,14 @@ namespace agon {
       explicit Parameter(const S& span) {
         detail::unpack(span, shape_, data_, strides_);
         grad_.resize(data_.size());
+      }
+
+      Parameter<T> copy() const {
+        Parameter<T> new_param(shape_);
+        new_param.data_ = data_;
+        new_param.grad_ = grad_;
+
+        return new_param;
       }
 
       std::vector<T>& grad() { return grad_; }
@@ -128,6 +269,17 @@ namespace agon {
           .shape = std::move(params.shape),
           .strides = std::move(params.strides)
         };
+      }
+
+      template<typename S>
+        requires detail::NestedSpan<S, T>
+      void fill(const S& span) {
+        auto new_shape = detail::deduce_shape(span);
+        assert(new_shape == shape_ && "Cannot fill parameter with data of different shape");
+
+        detail::fill(span, new_shape, [&](const auto& leaf, size_t offset) {
+          std::copy(leaf.begin(), leaf.end(), data_.begin() + offset);
+        });
       }
 
       void zero_grad() {
@@ -198,19 +350,20 @@ namespace agon {
 
             constexpr size_t q_vec_size = simd::vec<Q>::size;
             constexpr size_t f_vec_size = simd::vec<T>::size;
-            constexpr size_t unroll_factor = std::max(simd::UNROLL_FACTOR / 2, 1);
-            constexpr size_t slice_idx = q_vec_size / f_vec_size;
+            constexpr size_t num_slices = q_vec_size / f_vec_size;
+            constexpr size_t unroll_factor = std::min(num_slices, 4UL);
 
             int i = 0;
-            for (; i + q_vec_size * unroll_factor <= leaf.size(); i += q_vec_size * unroll_factor) {
-              simd::unroll<unroll_factor>([&]<size_t index>() {
-                constexpr size_t offset0 = index * q_vec_size;
+            for (; i + q_vec_size <= leaf.size(); i += q_vec_size) {
+              constexpr size_t offset0 = index * q_vec_size;
 
-                auto scale_vec = simd::set1<T>(scale_cast);
-                auto zero_point_vec = simd::set1<T>(zero_point_cast);
+              auto scale_vec = simd::set1<T>(scale_cast);
+              auto zero_point_vec = simd::set1<T>(zero_point_cast);
 
-                auto q_vec = simd::load<Q>(&leaf[i + offset0]);
-                simd::unroll<slice_idx>([&]<size_t slice>() {
+              auto q_vec = simd::load<Q>(&leaf[i + offset0]);
+              int j = 0;
+              for (; j + unroll_factor <= num_slices; j += unroll_factor) {
+                simd::unroll<unroll_factor>([&]<size_t slice>() {
                   constexpr size_t offset1 = slice * f_vec_size;
 
                   auto q_float_vec = simd::cast<T, slice>(q_vec);
@@ -218,9 +371,9 @@ namespace agon {
                   auto val_vec = simd::sub(q_float_vec, zero_point_vec);
                   val_vec = simd::mul(val_vec, scale_vec);
 
-                  simd::store(&this->data_[offset + i + offset0 + offset1], val_vec);
+                  simd::store(&this->data_[i + j + offset + offset0 + offset1], val_vec);
                 });
-              });
+              }
             }
 
             for (; i < leaf.size(); ++i) {
@@ -303,67 +456,6 @@ namespace agon {
     private:
       float scale_ = 1.0f;
       float zero_point_ = 0.0f;
-  };
-
-  template<typename T>
-    requires std::is_floating_point_v<T>
-  struct View {
-    using is_param_like = std::true_type;
-    using DataType = T;
-
-    std::reference_wrapper<Parameter<std::remove_const_t<T>>> ref;
-    size_t offset;
-    std::vector<size_t> shape;
-    std::vector<size_t> strides;
-
-    template<typename... Args>
-      requires (std::convertible_to<Args, Slice> && ...)
-    View<T> operator[](Args... args) {
-      std::array<Slice, sizeof...(Args)> slices{args...};
-
-      auto params = detail::compute_view(slices, shape, strides);
-      return View<T>{
-        .ref = ref,
-        .offset = offset + params.offset,
-        .shape = std::move(params.shape),
-        .strides = std::move(params.strides)
-      };
-    }
-
-    template<typename... Args>
-      requires (std::convertible_to<Args, Slice> && ...)
-    const View<const T> operator[](Args... args) const {
-      std::array<Slice, sizeof...(Args)> slices{args...};
-
-      auto params = detail::compute_view(slices, shape, strides);
-      return View<const T>{
-        .ref = std::cref(ref.get()),
-        .offset = offset + params.offset,
-        .shape = std::move(params.shape),
-        .strides = std::move(params.strides)
-      };
-    }
-
-    std::vector<T>& grad() { return ref.get().grad(); }
-    const std::vector<T>& grad() const { return ref.get().grad(); }
-
-    std::vector<T>& data() { return ref.get().data(); }
-    const std::vector<T>& data() const { return ref.get().data(); }
-
-    size_t rank() const { return shape.size(); }
-
-    size_t numel() const {
-      return std::accumulate(shape.begin(), shape.end(), size_t{1}, std::multiplies<size_t>{});
-    }
-
-    bool is_contiguous() const {
-      size_t expected_stride = 1;
-      for (size_t i = shape.size(); i-- > 0; ) {
-        if (strides[i] != expected_stride) return false;
-        expected_stride *= shape[i];
-      }
-      return true;
-    }
   };
 
   template<typename T>

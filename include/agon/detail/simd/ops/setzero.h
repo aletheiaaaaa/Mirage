@@ -16,7 +16,7 @@ namespace agon::simd {
   template<typename T>
     requires IsOperable<T>
   inline T setzero() {
-    if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t>) {
+    if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t> || std::is_same_v<T, int32_t>) {
       return Vec<CURRENT_ARCH, T>(_mm512_setzero_si512());
     } else if constexpr (std::is_same_v<T, float>) {
       return Vec<CURRENT_ARCH, T>(_mm512_setzero_ps());
@@ -29,7 +29,7 @@ namespace agon::simd {
   template<typename T>
     requires IsOperable<T>
   inline T setzero() {
-    if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t>) {
+    if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t> || std::is_same_v<T, int32_t>) {
       return Vec<CURRENT_ARCH, T>(_mm256_setzero_si256());
     } else if constexpr (std::is_same_v<T, float>) {
       return Vec<CURRENT_ARCH, T>(_mm256_setzero_ps());
@@ -42,7 +42,7 @@ namespace agon::simd {
   template<typename T>
     requires IsOperable<T>
   inline T setzero() {
-    if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t>) {
+    if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t> || std::is_same_v<T, int32_t>) {
       return Vec<CURRENT_ARCH, T>(_mm_setzero_si128());
     } else if constexpr (std::is_same_v<T, float>) {
       return Vec<CURRENT_ARCH, T>(_mm_setzero_ps());

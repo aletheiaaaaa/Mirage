@@ -24,6 +24,7 @@ namespace agon::detail {
     && std::is_same_v<typename span_scalar<S>::type, T>;
 
   template<typename S, typename F>
+    requires is_span<S>::value
   void walk(const S& span, std::vector<size_t>& shape, size_t& offset, bool first, F&& func) {
     if (first) shape.push_back(span.size());
 
@@ -39,6 +40,7 @@ namespace agon::detail {
   }
 
   template<typename S>
+    requires NestedSpan<S, typename span_scalar<S>::type>
   std::vector<size_t> deduce_shape(const S& span) {
     std::vector<size_t> shape;
     size_t dummy = 0;
@@ -48,12 +50,14 @@ namespace agon::detail {
   }
 
   template<typename S, typename F>
+    requires NestedSpan<S, typename span_scalar<S>::type>
   void fill(const S& span, std::vector<size_t>& shape, F&& func) {
     size_t offset = 0;
     walk(span, shape, offset, false, func);
   }
 
   template<typename S, typename Out, typename F>
+    requires NestedSpan<S, typename span_scalar<S>::type>
   void unpack(
     const S& span, 
     std::vector<size_t>& shape, 
@@ -63,7 +67,7 @@ namespace agon::detail {
   ) {
     shape = deduce_shape(span);
 
-    size_t numel = std::accumulate(shape.begin(), shape.end(), size_t{1}, std::multiplies<>{});
+    size_t numel = std::accumulate(shape.begin(), shape.end(), size_t{1}, std::multiplies<size_t>{});
     data.resize(numel);
 
     fill(span, shape, [&](const auto& leaf, size_t off) {
@@ -71,12 +75,11 @@ namespace agon::detail {
     });
 
     strides.resize(shape.size());
-    std::exclusive_scan(
-      shape.rbegin(), shape.rend(), strides.rbegin(), size_t{1}, std::multiplies<>{}
-    );
+    std::exclusive_scan(shape.rbegin(), shape.rend(), strides.rbegin(), size_t{1}, std::multiplies<size_t>{});
   }
 
   template<typename S, typename T>
+    requires NestedSpan<S, T>
   void unpack(
     const S& span, 
     std::vector<size_t>& shape, 

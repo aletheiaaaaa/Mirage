@@ -16,7 +16,7 @@ namespace agon::simd {
   template<typename T>
     requires IsOperable<T>
   inline Vec<CURRENT_ARCH, T> load(const T* ptr) {
-    if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t>) {
+    if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t> || std::is_same_v<T, int32_t>) {
       return Vec<CURRENT_ARCH, T>(_mm512_loadu_si512(reinterpret_cast<const __m512i*>(ptr)));
     } else if constexpr (std::is_same_v<T, float>) {
       return Vec<CURRENT_ARCH, T>(_mm512_loadu_ps(ptr));
@@ -29,7 +29,7 @@ namespace agon::simd {
   template<typename T>
     requires IsOperable<T>
   inline Vec<CURRENT_ARCH, T> load(const T* ptr) {
-    if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t>) {
+    if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t> || std::is_same_v<T, int32_t>) {
       return Vec<CURRENT_ARCH, T>(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(ptr)));
     } else if constexpr (std::is_same_v<T, float>) {
       return Vec<CURRENT_ARCH, T>(_mm256_loadu_ps(ptr));
@@ -42,7 +42,7 @@ namespace agon::simd {
   template<typename T>
     requires IsOperable<T>
   inline Vec<CURRENT_ARCH, T> load(const T* ptr) {
-    if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t>) {
+    if constexpr (std::is_same_v<T, int8_t> || std::is_same_v<T, int16_t> || std::is_same_v<T, int32_t>) {
       return Vec<CURRENT_ARCH, T>(_mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr)));
     } else if constexpr (std::is_same_v<T, float>) {
       return Vec<CURRENT_ARCH, T>(_mm_loadu_ps(ptr));

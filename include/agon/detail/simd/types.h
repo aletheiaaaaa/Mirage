@@ -40,6 +40,16 @@ namespace agon::simd {
   };
 
   template<>
+  struct Vec<Arch::AVX512, int32_t> {
+    using scalar_type = int32_t;
+    static constexpr size_t size = 16;
+    __m512i data;
+
+    Vec() = default;
+    explicit Vec(__m512i val) : data(val) {}
+  };
+
+  template<>
   struct Vec<Arch::AVX512, float> {
     using scalar_type = float;
     static constexpr size_t size = 16;
@@ -73,6 +83,16 @@ namespace agon::simd {
   struct Vec<Arch::AVX2, int16_t> {
     using scalar_type = int16_t;
     static constexpr size_t size = 16;
+    __m256i data;
+
+    Vec() = default;
+    explicit Vec(__m256i val) : data(val) {}
+  };
+
+  template<>
+  struct Vec<Arch::AVX2, int32_t> {
+    using scalar_type = int32_t;
+    static constexpr size_t size = 8;
     __m256i data;
 
     Vec() = default;
@@ -120,6 +140,16 @@ namespace agon::simd {
   };
 
   template<>
+  struct Vec<Arch::SSE4_1, int32_t> {
+    using scalar_type = int32_t;
+    static constexpr size_t size = 4;
+    __m128i data;
+
+    Vec() = default;
+    explicit Vec(__m128i val) : data(val) {}
+  };
+
+  template<>
   struct Vec<Arch::SSE4_1, float> {
     using scalar_type = float;
     static constexpr size_t size = 4;
@@ -160,6 +190,16 @@ namespace agon::simd {
   };
 
   template<>
+  struct Vec<Arch::GENERIC, int32_t> {
+    using scalar_type = int32_t;
+    static constexpr size_t size = 1;
+    int32_t data;
+
+    Vec() = default;
+    explicit Vec(int32_t val) : data(val) {}
+  };
+
+  template<>
   struct Vec<Arch::GENERIC, float> {
     using scalar_type = float;
     static constexpr size_t size = 1;
@@ -182,6 +222,6 @@ namespace agon::simd {
 
   template<typename T>
   concept IsOperable = std::is_same_v<T, int8_t>
-    || std::is_same_v<T, int16_t> || std::is_same_v<T, float>
-    || std::is_same_v<T, double>;
+    || std::is_same_v<T, int16_t> || std::is_same_v<T, int32_t>
+    || std::is_same_v<T, float> || std::is_same_v<T, double>;
 }

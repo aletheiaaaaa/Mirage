@@ -30,6 +30,8 @@ namespace agon::simd {
       func.template operator()<float>();
     } else if (std::is_same_v<T, double>) {
       func.template operator()<double>();
+    } else if (std::is_same_v<T, int32_t>) {
+      func.template operator()<int32_t>();
     } else {
       throw std::runtime_error("Unsupported data type for SIMD operation");
     }

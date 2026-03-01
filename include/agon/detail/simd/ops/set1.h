@@ -20,6 +20,8 @@ namespace agon::simd {
       return Vec<CURRENT_ARCH, T>(_mm512_set1_epi8(val));
     } else if constexpr (std::is_same_v<T, int16_t>) {
       return Vec<CURRENT_ARCH, T>(_mm512_set1_epi16(val));
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+      return Vec<CURRENT_ARCH, T>(_mm512_set1_epi32(val));
     } else if constexpr (std::is_same_v<T, float>) {
       return Vec<CURRENT_ARCH, T>(_mm512_set1_ps(val));
     } else if constexpr (std::is_same_v<T, double>) {
@@ -35,6 +37,8 @@ namespace agon::simd {
       return Vec<CURRENT_ARCH, T>(_mm256_set1_epi8(val));
     } else if constexpr (std::is_same_v<T, int16_t>) {
       return Vec<CURRENT_ARCH, T>(_mm256_set1_epi16(val));
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+      return Vec<CURRENT_ARCH, T>(_mm256_set1_epi32(val));
     } else if constexpr (std::is_same_v<T, float>) {
       return Vec<CURRENT_ARCH, T>(_mm256_set1_ps(val));
     } else if constexpr (std::is_same_v<T, double>) {
@@ -50,6 +54,8 @@ namespace agon::simd {
       return Vec<CURRENT_ARCH, T>(_mm_set1_epi8(val));
     } else if constexpr (std::is_same_v<T, int16_t>) {
       return Vec<CURRENT_ARCH, T>(_mm_set1_epi16(val));
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+      return Vec<CURRENT_ARCH, T>(_mm_set1_epi32(val));
     } else if constexpr (std::is_same_v<T, float>) {
       return Vec<CURRENT_ARCH, T>(_mm_set1_ps(val));
     } else if constexpr (std::is_same_v<T, double>) {

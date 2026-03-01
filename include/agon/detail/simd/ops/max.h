@@ -22,6 +22,8 @@ namespace agon::simd {
       return Vec<CURRENT_ARCH, T>(_mm512_max_epi8(a.data, b.data));
     } else if constexpr (std::is_same_v<T, int16_t>) {
       return Vec<CURRENT_ARCH, T>(_mm512_max_epi16(a.data, b.data));
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+      return Vec<CURRENT_ARCH, T>(_mm512_max_epi32(a.data, b.data));
     } else if constexpr (std::is_same_v<T, float>) {
       return Vec<CURRENT_ARCH, T>(_mm512_max_ps(a.data, b.data));
     } else if constexpr (std::is_same_v<T, double>) {
@@ -37,6 +39,8 @@ namespace agon::simd {
       return Vec<CURRENT_ARCH, T>(_mm256_max_epi8(a.data, b.data));
     } else if constexpr (std::is_same_v<T, int16_t>) {
       return Vec<CURRENT_ARCH, T>(_mm256_max_epi16(a.data, b.data));
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+      return Vec<CURRENT_ARCH, T>(_mm256_max_epi32(a.data, b.data));
     } else if constexpr (std::is_same_v<T, float>) {
       return Vec<CURRENT_ARCH, T>(_mm256_max_ps(a.data, b.data));
     } else if constexpr (std::is_same_v<T, double>) {
@@ -52,6 +56,8 @@ namespace agon::simd {
       return Vec<CURRENT_ARCH, T>(_mm_max_epi8(a.data, b.data));
     } else if constexpr (std::is_same_v<T, int16_t>) {
       return Vec<CURRENT_ARCH, T>(_mm_max_epi16(a.data, b.data));
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+      return Vec<CURRENT_ARCH, T>(_mm_max_epi32(a.data, b.data));
     } else if constexpr (std::is_same_v<T, float>) {
       return Vec<CURRENT_ARCH, T>(_mm_max_ps(a.data, b.data));
     } else if constexpr (std::is_same_v<T, double>) {
