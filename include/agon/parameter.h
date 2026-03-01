@@ -11,6 +11,9 @@
 #include <ranges>
 #include <cassert>
 #include <numeric>
+#include <cmath>
+#include <algorithm>
+#include <functional>
 
 #include "detail/simd/utils.h"
 #include "detail/simd/ops.h"
@@ -18,6 +21,10 @@
 #include "detail/flatten.h"
 
 namespace agon {
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  struct View;
+
   struct Slice {
     static constexpr size_t Start = 0;
     static constexpr size_t End = std::numeric_limits<size_t>::max();
@@ -45,7 +52,7 @@ namespace agon {
       std::vector<size_t> shape;
       std::vector<size_t> strides;
       for (const auto& [idx, slice] : std::views::enumerate(slices)) {
-        assert((slice.end - 1< src_shape[idx] || slice.end == Slice::End) && "Array index out of bounds");
+        assert((slice.end - 1 < src_shape[idx] || slice.end == Slice::End) && "Array index out of bounds");
         assert((slice.start <= slice.end - 1) && "Slice should begin before it ends");
         assert((slices.size() == src_shape.size()) && "There should be as many slices as dimensions");
 
@@ -65,66 +72,12 @@ namespace agon {
     }
   }
 
-  template<typename T> 
-    requires std::is_floating_point_v<T>
-  class Parameter;
-
-  template<typename T>
-    requires std::is_floating_point_v<T>
-  struct View {
-    using is_param_like = std::true_type;
-    using DataType = T;
-
-    std::reference_wrapper<Parameter<std::remove_const_t<T>>> ref;
-    size_t offset;
-    std::vector<size_t> shape;
-    std::vector<size_t> strides;
-
-    template<typename... Args>
-      requires (std::convertible_to<Args, Slice> && ...)
-    View<T> operator[](Args... args) {
-      std::array<Slice, sizeof...(Args)> slices{args...};
-
-      auto params = detail::compute_view(slices, shape, strides);
-      return View<T>{
-        .ref = ref,
-        .offset = offset + params.offset,
-        .shape = std::move(params.shape),
-        .strides = std::move(params.strides)
-      };
-    }
-
-    template<typename... Args>
-      requires (std::convertible_to<Args, Slice> && ...)
-    const View<const T> operator[](Args... args) const {
-      std::array<Slice, sizeof...(Args)> slices{args...};
-
-      auto params = detail::compute_view(slices, shape, strides);
-      return View<const T>{
-        .ref = std::cref(ref.get()),
-        .offset = offset + params.offset,
-        .shape = std::move(params.shape),
-        .strides = std::move(params.strides)
-      };
-    }
-
-    std::vector<T>& grad();
-    const std::vector<T>& grad() const;
-
-    std::vector<T>& data();
-    const std::vector<T>& data() const;
-
-    size_t rank() const;
-    size_t numel() const;
-
-    bool is_contiguous() const;
-  };
-
   template<typename T>
     requires std::is_floating_point_v<T>
   class Parameter {
     public:
       using is_param_like = std::true_type;
+      using is_quantized = std::false_type;
       using DataType = T;
 
       explicit Parameter(const std::initializer_list<size_t>& shape) 
@@ -205,6 +158,7 @@ namespace agon {
   class Quantized : public Parameter<T> {
     public:
       using is_param_like = std::true_type;
+      using is_quantized = std::true_type;
       using QuantizedType = Q;
 
       explicit Quantized(const std::initializer_list<size_t>& shape, float scale = 1.0f, float zero_point = 0.0f) 
@@ -263,10 +217,71 @@ namespace agon {
   };
 
   template<typename T>
+    requires std::is_floating_point_v<T>
+  struct View {
+    using is_param_like = std::true_type;
+    using DataType = T;
+
+    std::reference_wrapper<Parameter<std::remove_const_t<T>>> ref;
+    size_t offset;
+    std::vector<size_t> shape;
+    std::vector<size_t> strides;
+
+    template<typename... Args>
+      requires (std::convertible_to<Args, Slice> && ...)
+    View<T> operator[](Args... args) {
+      std::array<Slice, sizeof...(Args)> slices{args...};
+
+      auto params = detail::compute_view(slices, shape, strides);
+      return View<T>{
+        .ref = ref,
+        .offset = offset + params.offset,
+        .shape = std::move(params.shape),
+        .strides = std::move(params.strides)
+      };
+    }
+
+    template<typename... Args>
+      requires (std::convertible_to<Args, Slice> && ...)
+    const View<const T> operator[](Args... args) const {
+      std::array<Slice, sizeof...(Args)> slices{args...};
+
+      auto params = detail::compute_view(slices, shape, strides);
+      return View<const T>{
+        .ref = std::cref(ref.get()),
+        .offset = offset + params.offset,
+        .shape = std::move(params.shape),
+        .strides = std::move(params.strides)
+      };
+    }
+
+    std::vector<T>& grad();
+    const std::vector<T>& grad() const;
+
+    std::vector<T>& data();
+    const std::vector<T>& data() const;
+
+    size_t rank() const;
+    size_t numel() const;
+
+    bool is_contiguous() const;
+  };
+
+  template<typename T>
   concept ParamLike = T::is_param_like::value;
 
   template<typename T>
-  using AsParameter_t = Parameter<typename T::DataType>;
+  struct AsParameter {};
+  template<typename T>
+  struct AsParameter<Parameter<T>> { 
+    using Type = Parameter<T>; 
+  };
+  template<typename Q, typename T>
+  struct AsParameter<Quantized<Q, T>> { 
+    using Type = Quantized<Q, T>; 
+  };
+  template<typename T>
+  using AsParameter_t = typename AsParameter<T>::Type;
 
   template<typename T>
   using RefVec = std::vector<std::reference_wrapper<T>>;
@@ -278,15 +293,13 @@ namespace agon {
     template<typename... Ts>
       requires (std::derived_from<Ts, Parameter<typename Ts::DataType>> && ...)
     ParameterPack(Ts&... params) {
-      (std::get<RefVec<AsParameter_t<Ts>>>(data)
-        .emplace_back(static_cast<AsParameter_t<Ts>&>(params)), ...);
+      (std::get<RefVec<AsParameter_t<Ts>>>(data).emplace_back(params), ...);
     }
 
     template<typename T>
       requires std::derived_from<T, Parameter<typename T::DataType>>
     void add_parameter(T& param) {
-      std::get<RefVec<AsParameter_t<T>>>(data)
-        .emplace_back(static_cast<AsParameter_t<T>&>(param));
+      std::get<RefVec<AsParameter_t<T>>>(data).emplace_back(param);
     }
   };
   template<typename... Ts>
@@ -295,9 +308,201 @@ namespace agon {
   template<typename T>
   struct ExtractType {};
   template<typename T>
-  struct ExtractType<Parameter<T>> {
-    using Type = T;
+  struct ExtractType<Parameter<T>> { using Type = T; };
+  template<typename Q, typename T>
+  struct ExtractType<Quantized<Q, T>> { 
+    using Type = T; 
   };
   template<typename T>
   using ExtractType_t = typename ExtractType<T>::Type;
+
+  // --- Parameter<T> implementations ---
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  std::vector<T>& Parameter<T>::grad() { return grad_; }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  const std::vector<T>& Parameter<T>::grad() const { return grad_; }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  std::vector<T>& Parameter<T>::data() { return data_; }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  const std::vector<T>& Parameter<T>::data() const { return data_; }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  const std::vector<size_t>& Parameter<T>::size() const { return shape_; }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  size_t Parameter<T>::size(size_t i) const { return shape_[i]; }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  size_t Parameter<T>::rank() const { return shape_.size(); }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  size_t Parameter<T>::numel() const { return data_.size(); }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  void Parameter<T>::zero_grad() {
+    std::fill(grad_.begin(), grad_.end(), T(0));
+  }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  void Parameter<T>::accumulate(const std::vector<T>& new_grad) {
+    constexpr size_t vec_size = simd::vec<T>::size;
+    constexpr size_t unroll_factor = simd::UNROLL_FACTOR;
+
+    size_t i = 0;
+    for (; i + vec_size * unroll_factor <= grad_.size(); i += vec_size * unroll_factor) {
+      simd::unroll<unroll_factor>([&]<size_t index>() {
+        constexpr size_t offset = index * vec_size;
+
+        auto grad_vec = simd::load<T>(&grad_[i + offset]);
+        auto new_vec = simd::load<T>(&new_grad[i + offset]);
+        grad_vec = simd::add(grad_vec, new_vec);
+        simd::store(&grad_[i + offset], grad_vec);
+      });
+    }
+
+    for (; i < grad_.size(); ++i) {
+      grad_[i] += new_grad[i];
+    }
+  }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  void Parameter<T>::update(const std::vector<T>& new_val) {
+    data_ = new_val;
+  }
+
+  // --- Quantized<Q, T> implementations ---
+
+  template<typename Q, typename T>
+    requires (std::is_same_v<Q, int16_t> || std::is_same_v<Q, int8_t>) && std::is_floating_point_v<T>
+  std::vector<Q> Quantized<Q, T>::quantized() const {
+    const auto& vals = this->data();
+    std::vector<Q> quantized_data(vals.size());
+
+    T inv_scale = static_cast<T>(1.0f / scale_);
+    T zero_point_cast = static_cast<T>(zero_point_);
+
+    constexpr size_t vec_size = simd::vec<T>::size;
+    constexpr size_t unroll_factor = simd::UNROLL_FACTOR;
+
+    size_t i = 0;
+    for (; i + vec_size * unroll_factor <= vals.size(); i += vec_size * unroll_factor) {
+      simd::unroll<unroll_factor>([&]<size_t index>() {
+        constexpr size_t offset = index * vec_size;
+
+        auto val_vec = simd::load<T>(&vals[i + offset]);
+        auto inv_scale_vec = simd::set1<T>(inv_scale);
+        auto zero_point_vec = simd::set1<T>(zero_point_cast);
+        auto q_vec = simd::fmadd(val_vec, inv_scale_vec, zero_point_vec);
+
+        simd::store(&quantized_data[i + offset], simd::cast<Q>(q_vec));
+      });
+    }
+
+    for (; i < vals.size(); ++i) {
+      quantized_data[i] = static_cast<Q>(inv_scale * vals[i] + zero_point_cast);
+    }
+
+    return quantized_data;
+  }
+
+  template<typename Q, typename T>
+    requires (std::is_same_v<Q, int16_t> || std::is_same_v<Q, int8_t>) && std::is_floating_point_v<T>
+  std::vector<T> Quantized<Q, T>::fake_quantized() const {
+    const auto& vals = this->data();
+    std::vector<T> fake_quantized_data(vals.size());
+
+    T inv_scale = static_cast<T>(1.0f / scale_);
+    T zero_point_cast = static_cast<T>(zero_point_);
+
+    constexpr size_t vec_size = simd::vec<T>::size;
+    constexpr size_t unroll_factor = simd::UNROLL_FACTOR;
+
+    size_t i = 0;
+    for (; i + vec_size * unroll_factor <= vals.size(); i += vec_size * unroll_factor) {
+      simd::unroll<unroll_factor>([&]<size_t index>() {
+        constexpr size_t offset = index * vec_size;
+
+        auto val_vec = simd::load<T>(&vals[i + offset]);
+        auto scale_vec = simd::set1<T>(scale_);
+        auto inv_scale_vec = simd::set1<T>(inv_scale);
+        auto zero_point_vec = simd::set1<T>(zero_point_cast);
+
+        auto q_vec = simd::fmadd(val_vec, inv_scale_vec, zero_point_vec);
+        q_vec = simd::round(q_vec);
+
+        auto dq_vec = simd::sub(q_vec, zero_point_vec);
+        dq_vec = simd::mul(dq_vec, scale_vec);
+        simd::store(&fake_quantized_data[i + offset], dq_vec);
+      });
+    }
+
+    for (; i < vals.size(); ++i) {
+      T q = std::round(inv_scale * vals[i] + zero_point_cast);
+      fake_quantized_data[i] = scale_ * (q - zero_point_cast);
+    }
+
+    return fake_quantized_data;
+  }
+
+  template<typename Q, typename T>
+    requires (std::is_same_v<Q, int16_t> || std::is_same_v<Q, int8_t>) && std::is_floating_point_v<T>
+  float Quantized<Q, T>::scale() const { return scale_; }
+
+  template<typename Q, typename T>
+    requires (std::is_same_v<Q, int16_t> || std::is_same_v<Q, int8_t>) && std::is_floating_point_v<T>
+  float Quantized<Q, T>::zero_point() const { return zero_point_; }
+
+  // --- View<T> implementations ---
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  size_t View<T>::rank() const { return shape.size(); }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  size_t View<T>::numel() const {
+    return std::accumulate(shape.begin(), shape.end(), size_t{1}, std::multiplies<size_t>{});
+  }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  bool View<T>::is_contiguous() const {
+    size_t expected_stride = 1;
+    for (size_t i = shape.size(); i-- > 0; ) {
+      if (strides[i] != expected_stride) return false;
+      expected_stride *= shape[i];
+    }
+    return true;
+  }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  std::vector<T>& View<T>::grad() { return ref.get().grad(); }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  const std::vector<T>& View<T>::grad() const { return ref.get().grad(); }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  std::vector<T>& View<T>::data() { return ref.get().data(); }
+
+  template<typename T>
+    requires std::is_floating_point_v<T>
+  const std::vector<T>& View<T>::data() const { return ref.get().data(); }
 }

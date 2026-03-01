@@ -17,7 +17,14 @@ namespace agon::optim {
     public:
       explicit Optimizer(ParameterPack<Ts...> parameters) : parameters_(parameters) {}
 
-      void zero_grad();
+      void zero_grad() {
+        std::apply([](auto&... param_vecs) {
+          (std::ranges::for_each(param_vecs, [](auto& param_ref) {
+            auto& param = param_ref.get();
+            param.zero_grad();
+          }), ...);
+        }, parameters_.data);
+      }
 
       template<typename T>
         requires std::derived_from<T, Parameter<typename T::DataType>>

@@ -48,12 +48,16 @@ namespace agon::detail {
   template <> struct TypeRank<double> : std::integral_constant<int, 1> {};
   template <> struct TypeRank<int8_t> : std::integral_constant<int, 2> {};
   template <> struct TypeRank<int16_t> : std::integral_constant<int, 3> {};
-  template <> struct TypeRank<int32_t> : std::integral_constant<int, 4> {};
-  template <> struct TypeRank<int64_t> : std::integral_constant<int, 5> {};
 
   template <typename T>
-    requires requires { typename T::DataType; }
-  struct TypeRank<T> : TypeRank<typename T::DataType> {};
+    requires requires { typename T::DataType; } && (!T::is_quantized::value)
+  struct TypeRank<T>
+      : std::integral_constant<int, TypeRank<typename T::DataType>::value * 10> {};
+
+  template <typename T>
+    requires requires { typename T::DataType; typename T::QuantizedType; } && T::is_quantized::value
+  struct TypeRank<T>
+      : std::integral_constant<int, TypeRank<typename T::DataType>::value * 10 + TypeRank<typename T::QuantizedType>::value + 1> {};
 
   template <typename T, typename SortedTuple>
   struct SortedInsert;
@@ -96,5 +100,4 @@ namespace agon::detail {
   };
   template <template <typename...> typename Trait, typename Tuple>
   using TransformTuple_t = TransformTuple<Trait, Tuple>::Type;
-
 }
