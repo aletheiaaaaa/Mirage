@@ -12,8 +12,12 @@
 #include <cassert>
 #include <numeric>
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 #include <functional>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
 
 #include "detail/simd/utils.h"
 #include "detail/simd/ops.h"
@@ -207,7 +211,7 @@ namespace agon {
 
   template<typename T>
     requires std::is_floating_point_v<T>
-  class Parameter {
+  class Parameter { 
     public:
       using is_param_like = std::true_type;
       using is_quantized = std::false_type;
@@ -229,6 +233,18 @@ namespace agon {
         new_param.grad_ = grad_;
 
         return new_param;
+      }
+
+      void view(const std::initializer_list<size_t>& new_shape) {
+        std::vector<size_t> new_shape_vec(new_shape);
+        size_t new_numel = std::accumulate(new_shape_vec.begin(), new_shape_vec.end(), size_t{1}, std::multiplies<size_t>{});
+        assert(new_numel == data_.size() && "Total number of elements must remain the same when reshaping");
+
+        shape_ = std::move(new_shape_vec);
+        strides_.resize(shape_.size());
+        std::exclusive_scan(
+          shape_.rbegin(), shape_.rend(), strides_.rbegin(), size_t{1}, std::multiplies<size_t>{}
+        );
       }
 
       std::vector<T>& grad() { return grad_; }
@@ -311,6 +327,21 @@ namespace agon {
         data_ = new_val;
       }
 
+      virtual void save_to_bin(const std::string& path_str, bool include_metadata = true) const {
+        std::filesystem::path path(path_str + ".bin");
+        std::ofstream out(path, std::ios::binary);
+
+        if (!out) throw std::runtime_error("Failed to open file: " + path_str);
+
+        if (include_metadata) {
+          size_t rank = shape_.size();
+          out.write(dtype_name(), std::strlen(dtype_name()) + 1);
+          out.write(reinterpret_cast<const char*>(&rank), sizeof(rank));
+          out.write(reinterpret_cast<const char*>(shape_.data()), shape_.size() * sizeof(size_t));
+        }
+        out.write(reinterpret_cast<const char*>(data_.data()), data_.size() * sizeof(T));
+      }
+
     protected:
       std::vector<size_t> shape_;
       std::vector<size_t> strides_;
@@ -326,6 +357,12 @@ namespace agon {
         size_t num = std::accumulate(shape_.begin(), shape_.end(), size_t{1}, std::multiplies<size_t>{});
         data_.resize(num);
         grad_.resize(num);
+      }
+
+      constexpr const char* dtype_name() const {
+        if constexpr (std::is_same_v<T, float>) return "float32\0";
+        else if constexpr (std::is_same_v<T, double>) return "float64\0";
+        else return "unknown\0";
       }
   };
 
@@ -355,23 +392,21 @@ namespace agon {
 
             int i = 0;
             for (; i + q_vec_size <= leaf.size(); i += q_vec_size) {
-              constexpr size_t offset0 = index * q_vec_size;
-
               auto scale_vec = simd::set1<T>(scale_cast);
               auto zero_point_vec = simd::set1<T>(zero_point_cast);
 
-              auto q_vec = simd::load<Q>(&leaf[i + offset0]);
+              auto q_vec = simd::load<Q>(&leaf[i]);
               int j = 0;
               for (; j + unroll_factor <= num_slices; j += unroll_factor) {
                 simd::unroll<unroll_factor>([&]<size_t slice>() {
-                  constexpr size_t offset1 = slice * f_vec_size;
+                  constexpr size_t offset0 = slice * f_vec_size;
 
                   auto q_float_vec = simd::cast<T, slice>(q_vec);
 
                   auto val_vec = simd::sub(q_float_vec, zero_point_vec);
                   val_vec = simd::mul(val_vec, scale_vec);
 
-                  simd::store(&this->data_[i + j + offset + offset0 + offset1], val_vec);
+                  simd::store(&this->data_[i + j + offset + offset0], val_vec);
                 });
               }
             }
@@ -453,26 +488,42 @@ namespace agon {
       float scale() const { return scale_; }
       float zero_point() const { return zero_point_; }
 
+      void save_to_bin(const std::string& path_str, bool dequantize = false, bool include_metadata = true) const {
+        std::filesystem::path path(path_str + ".bin");
+        std::ofstream out(path, std::ios::binary);
+        if (!out) throw std::runtime_error("Failed to open file: " + path_str);
+
+        if (include_metadata) {
+          size_t rank = this->shape_.size();
+          out.write(qtype_name(), std::strlen(qtype_name()) + 1);
+          out.write(this->dtype_name(), std::strlen(this->dtype_name()) + 1);
+          out.write(reinterpret_cast<const char*>(&rank), sizeof(rank));
+          out.write(reinterpret_cast<const char*>(this->shape_.data()), this->shape_.size() * sizeof(size_t));
+          out.write(reinterpret_cast<const char*>(&scale_), sizeof(scale_));
+          out.write(reinterpret_cast<const char*>(&zero_point_), sizeof(zero_point_));
+        }
+        if (dequantize) {
+          std::vector<T> data = fake_quantized();
+          out.write(reinterpret_cast<const char*>(data.data()), data.size() * sizeof(T));
+        } else {
+          std::vector<Q> data = quantized();
+          out.write(reinterpret_cast<const char*>(data.data()), data.size() * sizeof(Q));
+        }
+      }
+
     private:
       float scale_ = 1.0f;
       float zero_point_ = 0.0f;
+
+      constexpr const char* qtype_name() const {
+        if constexpr (std::is_same_v<Q, int8_t>) return "int8\0";
+        else if constexpr (std::is_same_v<Q, int16_t>) return "int16\0";
+        else return "unknown\0";
+      }
   };
 
   template<typename T>
   concept ParamLike = T::is_param_like::value;
-
-  template<typename T>
-  struct AsParameter {};
-  template<typename T>
-  struct AsParameter<Parameter<T>> { 
-    using Type = Parameter<T>; 
-  };
-  template<typename Q, typename T>
-  struct AsParameter<Quantized<Q, T>> { 
-    using Type = Quantized<Q, T>; 
-  };
-  template<typename T>
-  using AsParameter_t = typename AsParameter<T>::Type;
 
   template<typename T>
   using RefVec = std::vector<std::reference_wrapper<T>>;
@@ -484,26 +535,38 @@ namespace agon {
     template<typename... Ts>
       requires (std::derived_from<Ts, Parameter<typename Ts::DataType>> && ...)
     ParameterPack(Ts&... params) {
-      (std::get<RefVec<AsParameter_t<Ts>>>(data).emplace_back(params), ...);
+      (std::get<RefVec<Ts>>(data).emplace_back(params), ...);
+      std::cout << "ParameterPack created with parameters of types: " 
+                << (typeid(Ts).name() + std::string(", ") + ... + "") << "\n";
     }
 
     template<typename T>
       requires std::derived_from<T, Parameter<typename T::DataType>>
     void add_parameter(T& param) {
-      std::get<RefVec<AsParameter_t<T>>>(data).emplace_back(param);
+      std::get<RefVec<T>>(data).emplace_back(param);
     }
   };
   template<typename... Ts>
-  ParameterPack(Ts&...) -> ParameterPack<detail::Canonicalized_t<AsParameter_t<std::decay_t<Ts>>...>>;
+  ParameterPack(Ts&...) -> ParameterPack<detail::Canonicalized_t<std::decay_t<Ts>...>>;
+
+  template<typename T, typename IsQuantized = std::false_type>
+  struct TaggedVector : std::vector<T> {
+    using std::vector<T>::vector;
+    using std::vector<T>::operator=;
+
+    TaggedVector(std::vector<T>&& v) : std::vector<T>(std::move(v)) {}
+    TaggedVector(const std::vector<T>& v) : std::vector<T>(v) {}
+  };
 
   template<typename T>
   struct ExtractType {};
   template<typename T>
-  struct ExtractType<Parameter<T>> { using Type = T; };
+  struct ExtractType<Parameter<T>> { using Type = TaggedVector<T, std::false_type>; };
   template<typename Q, typename T>
-  struct ExtractType<Quantized<Q, T>> { 
-    using Type = T; 
-  };
+  struct ExtractType<Quantized<Q, T>> { using Type = TaggedVector<T, std::true_type>; };
   template<typename T>
   using ExtractType_t = typename ExtractType<T>::Type;
+
+  template<typename DedupedTuple>
+  using ExtractedVector = detail::TransformTuple_t<ExtractType_t, DedupedTuple>;
 }

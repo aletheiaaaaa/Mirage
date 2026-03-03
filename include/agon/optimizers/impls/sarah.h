@@ -4,6 +4,7 @@
 #include "../../detail/simd/ops.h"
 #include "../../detail/simd/utils.h"
 
+#include <cstring>
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -13,16 +14,16 @@ namespace agon::optim {
   struct SarahParams {
     float lr = 0.01f;
 
-    bool recompute = false;
-    int recompute_interval = 0;
+    bool recompute = true;
+    int recompute_every = 64;
 
     bool maximize = false;
   };
 
   template<typename DedupedTuple>
   struct SarahState : public OptimizerState {
-    detail::TransformTuple_t<std::vector, detail::TransformTuple_t<ExtractType_t, DedupedTuple>> prev_grad{};
-    detail::TransformTuple_t<std::vector, detail::TransformTuple_t<ExtractType_t, DedupedTuple>> prev_update{};
+    ExtractedVector<DedupedTuple> prev_grad{};
+    ExtractedVector<DedupedTuple> prev_update{};
   };
 
   template<typename... Ts>
@@ -30,31 +31,36 @@ namespace agon::optim {
     public:
       explicit Sarah(ParameterPack<Ts...> parameters, SarahParams options = {})
         : Optimizer<Ts...>(parameters), options_(options) {
-          [&]<size_t... Is>(std::index_sequence<Is...>) {
-            ([&]<size_t I>() {
-              for (auto& param_ref : std::get<I>(this->parameters_.data)) {
+          if (options_.recompute && options_.recompute_every == 0) throw std::invalid_argument("Recompute every must be greater than 0 when recompute is enabled");
+
+          std::apply([&](auto&... param_vecs) {
+            ([&](auto& param_vec) {
+              using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
+              auto& prev_grad = std::get<ExtractType_t<ParamType>>(this->state_.prev_grad);
+              auto& prev_update = std::get<ExtractType_t<ParamType>>(this->state_.prev_update);
+              for (auto& param_ref : param_vec) {
                 auto& param = param_ref.get();
-                using T = typename std::unwrap_ref_decay_t<decltype(param)>::DataType;
-                auto& prev_grad = std::get<I>(this->state_.prev_grad);
-                auto& prev_update = std::get<I>(this->state_.prev_update);
+                using T = typename ParamType::DataType;
                 prev_grad.insert(prev_grad.end(), param.numel(), T(0));
                 prev_update.insert(prev_update.end(), param.numel(), T(0));
               }
-            }.template operator()<Is>(), ...);
-          }(std::make_index_sequence<sizeof...(Ts)>{});
+            }(param_vecs), ...);
+          }, this->parameters_.data);
         }
 
+      bool recompute() const override { return options_.recompute && state_.step % options_.recompute_every == 0; }
+
       void step() override {
-        [&]<size_t... Is>(std::index_sequence<Is...>) {
-          ([&]<size_t I>() {
-            auto& param_vec = std::get<I>(this->parameters_.data);
-            auto& prev_grad_full = std::get<I>(state_.prev_grad);
-            auto& prev_update_full = std::get<I>(state_.prev_update);
+        std::apply([&](auto&... param_vecs) {
+          ([&](auto& param_vec) {
+            using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
+            auto& prev_grad_full = std::get<ExtractType_t<ParamType>>(state_.prev_grad);
+            auto& prev_update_full = std::get<ExtractType_t<ParamType>>(state_.prev_update);
 
             size_t state_offset = 0;
-            for ([[maybe_unused]] auto [_, param_ref] : std::views::enumerate(param_vec)) {
+            for (auto param_ref : param_vec) {
               auto& param = param_ref.get();
-              using T = typename std::unwrap_ref_decay_t<decltype(param)>::DataType;
+              using T = typename ParamType::DataType;
 
               auto& grad_full = param.grad();
               auto& data_full = param.data();
@@ -71,7 +77,7 @@ namespace agon::optim {
                   if (options_.maximize) grad = simd::neg(grad);
 
                   auto update = [&](){
-                    if (options_.recompute && state_.step % options_.recompute_interval == 0) return grad;
+                    if (options_.recompute && state_.step % options_.recompute_every == 0) return grad;
 
                     auto prev_grad = simd::load<T>(&prev_grad_full[state_offset + i + offset]);
                     auto prev_update = simd::load<T>(&prev_update_full[state_offset + i + offset]);
@@ -89,7 +95,7 @@ namespace agon::optim {
 
               for (; i < grad_full.size(); ++i) {
                 T grad = options_.maximize ? -grad_full[i] : grad_full[i];
-                T update = (options_.recompute && state_.step % options_.recompute_interval == 0)
+                T update = (options_.recompute && state_.step % options_.recompute_every == 0)
                   ? grad : grad - prev_grad_full[state_offset + i] + prev_update_full[state_offset + i];
 
                 data_full[i] += options_.lr * update;
@@ -98,74 +104,80 @@ namespace agon::optim {
 
               state_offset += param.numel();
             }
-          }.template operator()<Is>(), ...);
-        }(std::make_index_sequence<sizeof...(Ts)>{});
-
-        state_.step++;
+          }(param_vecs), ...);
+        }, this->parameters_.data);
+        this->state_.step++;
       }
 
       void load_from_bin(const std::string& path_str) override {
-        std::filesystem::path path(path_str);
+        std::filesystem::path path(path_str + ".bin");
         if (!std::filesystem::exists(path)) throw std::runtime_error("File not found: " + path_str);
 
         std::ifstream in(path, std::ios::binary);
         if (!in) throw std::runtime_error("Failed to open file: " + path_str);
+        std::string name;
+
+        std::getline(in, name, '\0');
+        if (name != optimizer_name()) throw std::runtime_error("Optimizer type mismatch: expected " + std::string(optimizer_name()));
 
         in.read(reinterpret_cast<char*>(&options_), sizeof(options_));
         in.read(reinterpret_cast<char*>(&state_.step), sizeof(state_.step));
 
-        auto read_param = [&]<size_t... Is>(std::index_sequence<Is...>) {
-          ([&]<size_t I>() {
-            auto& param_vec = std::get<I>(this->parameters_.data);
-            auto& prev_grad = std::get<I>(state_.prev_grad);
-            auto& prev_update = std::get<I>(state_.prev_update);
+        std::apply([&](auto&... param_vecs) {
+          ([&](auto& param_vec) {
+            using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
+            auto& prev_grad = std::get<ExtractType_t<ParamType>>(state_.prev_grad);
+            auto& prev_update = std::get<ExtractType_t<ParamType>>(state_.prev_update);
 
             size_t state_offset = 0;
             for (auto& param_ref : param_vec) {
               auto& param = param_ref.get();
-              using T = typename std::unwrap_ref_decay_t<decltype(param)>::DataType;
+              using T = typename ParamType::DataType;
               in.read(reinterpret_cast<char*>(param.data().data()), param.numel() * sizeof(T));
-              in.read(reinterpret_cast<char*>(prev_grad.data() + state_offset), param.numel() * sizeof(T));
-              in.read(reinterpret_cast<char*>(prev_update.data() + state_offset), param.numel() * sizeof(T));
+              if (options_.recompute) {
+                in.read(reinterpret_cast<char*>(prev_grad.data() + state_offset), param.numel() * sizeof(T));
+                in.read(reinterpret_cast<char*>(prev_update.data() + state_offset), param.numel() * sizeof(T));
+              }
               state_offset += param.numel();
             }
-          }.template operator()<Is>(), ...);
-        };
-
-        read_param(std::make_index_sequence<sizeof...(Ts)>{});
+          }(param_vecs), ...);
+        }, this->parameters_.data);
       }
 
       void save_to_bin(const std::string& path_str) const override {
-        std::filesystem::path path(path_str);
+        std::filesystem::path path(path_str + ".bin");
         std::ofstream out(path, std::ios::binary);
         if (!out) throw std::runtime_error("Failed to open file: " + path_str);
 
+        out.write(optimizer_name(), std::strlen(optimizer_name()) + 1);
         out.write(reinterpret_cast<const char*>(&options_), sizeof(options_));
         out.write(reinterpret_cast<const char*>(&state_.step), sizeof(state_.step));
 
-        auto write_param = [&]<size_t... Is>(std::index_sequence<Is...>) {
-          ([&]<size_t I>() {
-            auto& param_vec = std::get<I>(this->parameters_.data);
-            auto& prev_grad = std::get<I>(state_.prev_grad);
-            auto& prev_update = std::get<I>(state_.prev_update);
+        std::apply([&](auto&... param_vecs) {
+          ([&](auto& param_vec) {
+            using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
+            auto& prev_grad = std::get<ExtractType_t<ParamType>>(state_.prev_grad);
+            auto& prev_update = std::get<ExtractType_t<ParamType>>(state_.prev_update);
 
             size_t state_offset = 0;
             for (auto& param_ref : param_vec) {
               auto& param = param_ref.get();
-              using T = typename std::unwrap_ref_decay_t<decltype(param)>::DataType;
+              using T = typename ParamType::DataType;
               out.write(reinterpret_cast<const char*>(param.data().data()), param.numel() * sizeof(T));
-              out.write(reinterpret_cast<const char*>(prev_grad.data() + state_offset), param.numel() * sizeof(T));
-              out.write(reinterpret_cast<const char*>(prev_update.data() + state_offset), param.numel() * sizeof(T));
+              if (options_.recompute) {
+                out.write(reinterpret_cast<const char*>(prev_grad.data() + state_offset), param.numel() * sizeof(T));
+                out.write(reinterpret_cast<const char*>(prev_update.data() + state_offset), param.numel() * sizeof(T));
+              }
               state_offset += param.numel();
             }
-          }.template operator()<Is>(), ...);
-        };
-
-        write_param(std::make_index_sequence<sizeof...(Ts)>{});
+          }(param_vecs), ...);
+        }, this->parameters_.data);
       }
 
     private:
       SarahParams options_;
       SarahState<Ts...> state_;
+
+      constexpr const char* optimizer_name() const { return "sarah\0"; }
   };
 }

@@ -20,3 +20,4 @@
 #include "ops/cast.h"
 #include "ops/gather.h"
 #include "ops/scatter.h"
+#include "ops/round.h"

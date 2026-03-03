@@ -32,6 +32,9 @@ namespace agon::optim {
         parameters_.template add_parameter(param);
       }
 
+      virtual bool recompute() const { return false; }
+      virtual bool use_ref() const { return false; }
+
       virtual void step() = 0;
 
       virtual void load_from_bin(const std::string& path) = 0;
