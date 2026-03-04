@@ -29,7 +29,7 @@ namespace agon::optim {
       template<typename T>
         requires std::derived_from<T, Parameter<typename T::DataType>>
       void add_parameter(T& param) {
-        parameters_.template add_parameter(param);
+        parameters_.add_parameter(param);
       }
 
       virtual bool recompute() const { return false; }

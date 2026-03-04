@@ -1,7 +1,8 @@
 #pragma once
 
 #include "../optimizer.h"
-#include "../../detail/simd/utils.h"
+#include "../../detail/utils.h"
+
 #include <eve/module/core.hpp>
 
 #include <cstring>

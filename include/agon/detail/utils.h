@@ -6,8 +6,9 @@
 #include <stdexcept>
 #include <typeinfo>
 
-#include "arch.h"
 #include <eve/wide.hpp>
+
+#include "arch.h"
 
 namespace agon::simd {
   template<typename F, typename T>

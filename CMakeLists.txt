@@ -12,16 +12,21 @@ option(AGON_ENABLE_AVX512 "Enable AVX512 instructions (if available)" ON)
 option(AGON_ENABLE_AVX2 "Enable AVX2 instructions (if available)" ON)
 option(AGON_ENABLE_SSE4 "Enable SSE4.1 instructions (if available)" ON)
 
-include(FetchContent)
-FetchContent_Declare(
-  eve
-  GIT_REPOSITORY https://github.com/jfalcou/eve.git
-  GIT_TAG v2023.02.15
-)
-set(EVE_BUILD_TEST OFF CACHE BOOL "" FORCE)
-set(EVE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
-set(EVE_BUILD_DOCUMENTATION OFF CACHE BOOL "" FORCE)
-FetchContent_Populate(eve)
+find_package(eve QUIET)
+if(NOT eve_FOUND)
+  include(FetchContent)
+  FetchContent_Declare(
+    eve
+    GIT_REPOSITORY https://github.com/jfalcou/eve.git
+    GIT_TAG v2023.02.15
+    EXCLUDE_FROM_ALL
+  )
+  set(EVE_BUILD_TEST OFF CACHE BOOL "" FORCE)
+  set(EVE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+  set(EVE_BUILD_DOCUMENTATION OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(eve)
+  set(AGON_EVE_FETCHED TRUE)
+endif()
 
 # Header-only library target
 add_library(agon INTERFACE)
@@ -34,9 +39,14 @@ target_compile_features(agon INTERFACE cxx_std_23)
 target_include_directories(agon
     INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<BUILD_INTERFACE:${eve_SOURCE_DIR}/include>
-        $<INSTALL_INTERFACE:include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
+
+if(AGON_EVE_FETCHED)
+    target_include_directories(agon INTERFACE $<BUILD_INTERFACE:${eve_SOURCE_DIR}/include>)
+else()
+    target_link_libraries(agon INTERFACE eve::eve)
+endif()
 
 # Compiler-specific settings
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -91,6 +101,12 @@ install(DIRECTORY include/agon
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
     FILES_MATCHING PATTERN "*.h"
 )
+
+if(AGON_EVE_FETCHED)
+    install(DIRECTORY ${eve_SOURCE_DIR}/include/eve
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    )
+endif()
 
 # Export targets
 install(EXPORT agonTargets

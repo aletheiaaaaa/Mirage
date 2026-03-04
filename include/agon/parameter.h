@@ -18,8 +18,9 @@
 #include <filesystem>
 #include <fstream>
 
-#include "detail/simd/utils.h"
 #include <eve/module/core.hpp>
+
+#include "detail/utils.h"
 #include "detail/dedup.h"
 #include "detail/unpack.h"
 
