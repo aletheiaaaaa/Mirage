@@ -13,8 +13,6 @@
 namespace agon::optim {
   struct SarahParams {
     float lr = 0.01f;
-
-    bool recompute = true;
     int recompute_every = 64;
 
     bool maximize = false;
@@ -31,7 +29,7 @@ namespace agon::optim {
     public:
       explicit Sarah(ParameterPack<Ts...> parameters, SarahParams options = {})
         : Optimizer<Ts...>(parameters), options_(options) {
-          if (options_.recompute && options_.recompute_every == 0) throw std::invalid_argument("Recompute every must be greater than 0 when recompute is enabled");
+          if ((options_.recompute_every != -1) && options_.recompute_every == 0) throw std::invalid_argument("Recompute every must be greater than 0 when recompute is enabled");
 
           std::apply([&](auto&... param_vecs) {
             ([&](auto& param_vec) {
@@ -48,7 +46,7 @@ namespace agon::optim {
           }, this->parameters_.data);
         }
 
-      bool recompute() const override { return options_.recompute && state_.step % options_.recompute_every == 0; }
+      bool recompute() const override { return (options_.recompute_every != -1) && state_.step % options_.recompute_every == 0; }
 
       void step() override {
         std::apply([&](auto&... param_vecs) {
@@ -77,7 +75,7 @@ namespace agon::optim {
                   if (options_.maximize) grad = simd::neg(grad);
 
                   auto update = [&](){
-                    if (options_.recompute && state_.step % options_.recompute_every == 0) return grad;
+                    if ((options_.recompute_every != -1) && state_.step % options_.recompute_every == 0) return grad;
 
                     auto prev_grad = simd::load<T>(&prev_grad_full[state_offset + i + offset]);
                     auto prev_update = simd::load<T>(&prev_update_full[state_offset + i + offset]);
@@ -95,7 +93,7 @@ namespace agon::optim {
 
               for (; i < grad_full.size(); ++i) {
                 T grad = options_.maximize ? -grad_full[i] : grad_full[i];
-                T update = (options_.recompute && state_.step % options_.recompute_every == 0)
+                T update = ((options_.recompute_every != -1) && state_.step % options_.recompute_every == 0)
                   ? grad : grad - prev_grad_full[state_offset + i] + prev_update_full[state_offset + i];
 
                 data_full[i] += options_.lr * update;
@@ -134,7 +132,7 @@ namespace agon::optim {
               auto& param = param_ref.get();
               using T = typename ParamType::DataType;
               in.read(reinterpret_cast<char*>(param.data().data()), param.numel() * sizeof(T));
-              if (options_.recompute) {
+              if ((options_.recompute_every != -1)) {
                 in.read(reinterpret_cast<char*>(prev_grad.data() + state_offset), param.numel() * sizeof(T));
                 in.read(reinterpret_cast<char*>(prev_update.data() + state_offset), param.numel() * sizeof(T));
               }
@@ -164,7 +162,7 @@ namespace agon::optim {
               auto& param = param_ref.get();
               using T = typename ParamType::DataType;
               out.write(reinterpret_cast<const char*>(param.data().data()), param.numel() * sizeof(T));
-              if (options_.recompute) {
+              if ((options_.recompute_every != -1)) {
                 out.write(reinterpret_cast<const char*>(prev_grad.data() + state_offset), param.numel() * sizeof(T));
                 out.write(reinterpret_cast<const char*>(prev_update.data() + state_offset), param.numel() * sizeof(T));
               }

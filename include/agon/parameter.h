@@ -601,9 +601,14 @@ namespace agon {
   ParameterPack(Ts&...) -> ParameterPack<detail::Canonicalized_t<std::decay_t<Ts>...>>;
 
   template<typename T, typename IsQuantized = std::false_type>
-  struct TaggedVector : std::vector<T> {
+  struct TaggedVector : private std::vector<T> {
     using std::vector<T>::vector;
     using std::vector<T>::operator=;
+    using std::vector<T>::operator[];
+    using std::vector<T>::data;
+    using std::vector<T>::begin;
+    using std::vector<T>::end;
+    using std::vector<T>::insert;
 
     TaggedVector(std::vector<T>&& v) : std::vector<T>(std::move(v)) {}
     TaggedVector(const std::vector<T>& v) : std::vector<T>(v) {}

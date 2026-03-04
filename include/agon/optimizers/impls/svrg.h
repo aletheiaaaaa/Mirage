@@ -8,12 +8,11 @@
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
+#include <stdexcept>
 
 namespace agon::optim {
   struct SVRGParams {
     float lr = 0.5f;
-
-    bool recompute = true;
     int recompute_every = 64;
 
     bool maximize = false;
@@ -33,8 +32,6 @@ namespace agon::optim {
     public:
       explicit SVRG(ParameterPack<Ts...> parameters, SVRGParams options = {})
         : Optimizer<Ts...>(parameters), options_(options) {
-          if (options_.recompute && options_.recompute_every == 0) throw std::invalid_argument("Recompute every must be greater than 0 when recompute is enabled");
-
           std::apply([&](auto&... param_vecs) {
             ([&](auto& param_vec) {
               using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
@@ -52,7 +49,7 @@ namespace agon::optim {
           }, this->parameters_.data);
         }
 
-      bool recompute() const override { return options_.recompute && state_.step % options_.recompute_every == 0; }
+      bool recompute() const override { return (options_.recompute_every != -1) && state_.step % options_.recompute_every == 0; }
       bool use_ref() const override { return state_.use_ref; }
 
       template<typename DedupedTuple>
@@ -88,13 +85,13 @@ namespace agon::optim {
                   if (options_.maximize) grad = simd::neg(grad);
 
                   auto update = [&](){
-                    if (options_.recompute && state_.step % options_.recompute_every == 0) return grad;
+                    if ((options_.recompute_every != -1) && state_.step % options_.recompute_every == 0) return grad;
 
                     auto ref_exact = simd::load<T>(&ref_exact_full[state_offset + i + off]);
                     auto ref_est = simd::load<T>(&ref_est_full[state_offset + i + off]);
 
                     return simd::add(simd::sub(grad, ref_est), ref_exact);
-                  }
+                  };
 
                   auto data = simd::load<T>(&data_full[i + off]);
                   data = simd::fmadd(simd::set1<T>(options_.lr), update, data);
@@ -104,7 +101,7 @@ namespace agon::optim {
 
               for (; i < grad_full.size(); ++i) {
                 T grad = options_.maximize ? -grad_full[i] : grad_full[i];
-                T update = (options_.recompute && state_.step % options_.recompute_every == 0)
+                T update = ((options_.recompute_every != -1) && state_.step % options_.recompute_every == 0)
                   ? grad : grad - ref_est_full[state_offset + i] + ref_exact_full[state_offset + i];
 
                 data_full[i] += options_.lr * update;
@@ -141,7 +138,7 @@ namespace agon::optim {
               auto& param = param_ref.get();
               using T = typename ParamType::DataType;
               in.read(reinterpret_cast<char*>(param.data().data()), param.numel() * sizeof(T));
-              if (options_.recompute) {
+              if ((options_.recompute_every != -1)) {
                 in.read(reinterpret_cast<char*>(ref_exact.data() + state_offset), param.numel() * sizeof(T));
                 in.read(reinterpret_cast<char*>(ref_est.data() + state_offset), param.numel() * sizeof(T));
               }
@@ -171,7 +168,7 @@ namespace agon::optim {
               auto& param = param_ref.get();
               using T = typename ParamType::DataType;
               out.write(reinterpret_cast<const char*>(param.data().data()), param.numel() * sizeof(T));
-              if (options_.recompute) {
+              if ((options_.recompute_every != -1)) {
                 out.write(reinterpret_cast<const char*>(ref_exact.data() + state_offset), param.numel() * sizeof(T));
                 out.write(reinterpret_cast<const char*>(ref_est.data() + state_offset), param.numel() * sizeof(T));
               }

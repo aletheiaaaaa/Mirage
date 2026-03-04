@@ -15,7 +15,7 @@ namespace agon::optim {
   struct LionParams {
     float lr = 1e-5f;
     float beta1 = 0.9f;
-    float beta2 = 0.4f;
+    float beta2 = 0.9f;
     float epsilon = 1e-8;
     float lambda = 0.0f;
 
