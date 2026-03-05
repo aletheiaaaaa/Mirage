@@ -184,6 +184,6 @@ namespace agon::optim {
       LionState<Ts...> state_;
       int num_proc_;
 
-      constexpr const char* optimizer_name() const { return "lion\0"; }
+      static constexpr const char* optimizer_name() { return "lion\0"; }
   };
 }

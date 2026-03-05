@@ -192,6 +192,6 @@ namespace agon::optim {
       SarahState<Ts...> state_;
       int num_proc_;
 
-      constexpr const char* optimizer_name() const { return "sarah\0"; }
+      static constexpr const char* optimizer_name() { return "sarah\0"; }
   };
 }

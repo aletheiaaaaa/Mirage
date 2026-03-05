@@ -178,6 +178,6 @@ namespace agon::optim {
       SGDState<Ts...> state_;
       int num_proc_;
 
-      constexpr const char* optimizer_name() const { return "sgd\0"; }
+      static constexpr const char* optimizer_name() { return "sgd\0"; }
   };
 }

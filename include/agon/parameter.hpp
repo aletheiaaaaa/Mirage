@@ -296,6 +296,36 @@ namespace agon {
         );
       }
 
+      void contiguous() {
+        if (is_contiguous()) return;
+
+        std::vector<T> indices = detail::compute_indices(0, shape_, strides_);
+        std::vector<T> new_data(data_.size());
+
+        constexpr size_t vec_size = eve::wide<T>::size();
+        const size_t unroll_factor = detail::UNROLL_FACTOR;
+
+        size_t i = 0;
+        for (; i + vec_size * unroll_factor <= indices.size(); i += vec_size * unroll_factor) {
+          detail::unroll<unroll_factor>([&]<size_t index>() {
+            constexpr size_t off = index * vec_size;
+
+            eve::wide<int32_t, eve::fixed<vec_size>> idx_wide(&indices[i + off]);
+            auto vals = eve::gather(data_.data(), idx_wide);
+            eve::store(vals, &new_data[i + off]);
+          });
+        }
+
+        for (; i < indices.size(); ++i) {
+          new_data[i] = data_[indices[i]];
+        }
+
+        data_ = std::move(new_data);
+        std::exclusive_scan(
+          shape_.rbegin(), shape_.rend(), strides_.rbegin(), size_t{1}, std::multiplies<size_t>{}
+        );
+      }
+
       std::vector<T>& grad() { return grad_; }
       const std::vector<T>& grad() const { return grad_; }
 
@@ -353,6 +383,15 @@ namespace agon {
         detail::fill(new_data, new_shape, [&](const auto& leaf, size_t offset) {
           std::copy(leaf.begin(), leaf.end(), data_.begin() + offset);
         });
+      }
+
+      bool is_contiguous() const {
+        size_t expected_stride = 1;
+        for (size_t i = shape_.size(); i-- > 0; ) {
+          if (strides_[i] != expected_stride) return false;
+          expected_stride *= shape_[i];
+        }
+        return true;
       }
 
       void zero_grad() {
@@ -416,7 +455,7 @@ namespace agon {
         grad_.resize(num);
       }
 
-      constexpr const char* dtype_name() const {
+      static constexpr const char* dtype_name() {
         if constexpr (std::is_same_v<T, float>) return "float32\0";
         else if constexpr (std::is_same_v<T, double>) return "float64\0";
         else return "unknown\0";
@@ -562,7 +601,7 @@ namespace agon {
       float scale_ = 1.0f;
       float zero_point_ = 0.0f;
 
-      constexpr const char* qtype_name() const {
+      static constexpr const char* qtype_name() {
         if constexpr (std::is_same_v<Q, int8_t>) return "int8\0";
         else if constexpr (std::is_same_v<Q, int16_t>) return "int16\0";
         else return "unknown\0";

@@ -198,6 +198,6 @@ namespace agon::optim {
       SVRGState<std::tuple<Ts...>> state_;
       int num_proc_;
 
-      constexpr const char* optimizer_name() const { return "svrg\0"; }
+      static constexpr const char* optimizer_name() { return "svrg\0"; }
   };
 }
