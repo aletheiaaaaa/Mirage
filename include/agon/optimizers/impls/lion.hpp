@@ -67,7 +67,7 @@ namespace agon::optim {
               size_t chunk_size = (param.numel() + num_proc_ - 1) / num_proc_;
 
               for (size_t t = 0; t < num_proc_; ++t) {
-                threads.emplace_back([&]() {
+                threads.emplace_back([&, t](){
                   size_t start = t * chunk_size;
                   size_t end = std::min(start + chunk_size, param.numel());
 
