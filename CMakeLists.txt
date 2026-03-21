@@ -171,14 +171,13 @@ install(EXPORT mirageTargets
 # Package configuration
 include(CMakePackageConfigHelpers)
 
-file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/mirageConfig.cmake.in
-[=[
-@PACKAGE_INIT@
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/mirageConfig.cmake.in"
+"@PACKAGE_INIT@
 
-include("${CMAKE_CURRENT_LIST_DIR}/mirageTargets.cmake")
+include(\"${CMAKE_CURRENT_LIST_DIR}/mirageTargets.cmake\")
 
 check_required_components(mirage)
-]=]
+"
 )
 
 configure_package_config_file(
@@ -229,6 +228,42 @@ foreach(file \${files})
     message(STATUS \"File \$ENV{DESTDIR}\${file} does not exist.\")
   endif()
 endforeach()
+
+# Remove directories that were installed by mirage (only if we fetched them)
+set(MIRAGE_EVE_FETCHED ${MIRAGE_EVE_FETCHED})
+set(MIRAGE_CEREAL_FETCHED ${MIRAGE_CEREAL_FETCHED})
+set(MIRAGE_EIGEN_FETCHED ${MIRAGE_EIGEN_FETCHED})
+
+if(MIRAGE_EVE_FETCHED)
+  set(eve_dir \"${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/eve\")
+  if(EXISTS \"\${eve_dir}\")
+    message(STATUS \"Removing eve directory: \${eve_dir}\")
+    file(REMOVE_RECURSE \"\${eve_dir}\")
+  endif()
+endif()
+
+if(MIRAGE_CEREAL_FETCHED)
+  set(cereal_dir \"${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/cereal\")
+  if(EXISTS \"\${cereal_dir}\")
+    message(STATUS \"Removing cereal directory: \${cereal_dir}\")
+    file(REMOVE_RECURSE \"\${cereal_dir}\")
+  endif()
+endif()
+
+if(MIRAGE_EIGEN_FETCHED)
+  set(eigen_dir \"${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/Eigen\")
+  if(EXISTS \"\${eigen_dir}\")
+    message(STATUS \"Removing Eigen directory: \${eigen_dir}\")
+    file(REMOVE_RECURSE \"\${eigen_dir}\")
+  endif()
+endif()
+
+# Remove mirage includes
+set(mirage_dir \"${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/mirage\")
+if(EXISTS \"\${mirage_dir}\")
+  message(STATUS \"Removing mirage directory: \${mirage_dir}\")
+  file(REMOVE_RECURSE \"\${mirage_dir}\")
+endif()
 ")
   add_custom_target(uninstall
     COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
