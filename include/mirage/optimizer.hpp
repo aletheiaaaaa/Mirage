@@ -1,8 +1,8 @@
 #pragma once
 
-#include "optimizers/impls/sgd.hpp"
-#include "optimizers/impls/adam.hpp"
-#include "optimizers/impls/sarah.hpp"
-#include "optimizers/impls/lion.hpp"
-#include "optimizers/impls/svrg.hpp"
-#include "optimizers/impls/splus.hpp"
+#include "optimizer/impls/sgd.hpp"
+#include "optimizer/impls/adam.hpp"
+#include "optimizer/impls/sarah.hpp"
+#include "optimizer/impls/lion.hpp"
+#include "optimizer/impls/svrg.hpp"
+#include "optimizer/impls/splus.hpp"
