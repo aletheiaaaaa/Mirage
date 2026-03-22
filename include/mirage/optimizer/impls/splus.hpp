@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../optimizer.hpp"
+#include "../../detail/matrix.hpp"
 #include "../../detail/utils.hpp"
 
 #include <cstddef>
@@ -8,6 +9,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 namespace mirage::optim {
   struct SPlusOptions {
@@ -17,6 +19,8 @@ namespace mirage::optim {
     float beta3 = 0.999f;
     float lambda = 0.0f;
     int decompose_every = 64;
+
+    int num_proc = 1;
 
     bool maximize = false;
 
@@ -40,8 +44,8 @@ namespace mirage::optim {
     requires detail::NonConstPack<DedupedPack>
   class SPlus : public Optimizer<DedupedPack> {
     public:
-      explicit SPlus(ParameterPack<DedupedPack> parameters, SPlusOptions options = {}, int num_proc = 1)
-        : Optimizer<DedupedPack>(parameters), options_(options), num_proc_(num_proc) {
+      explicit SPlus(ParameterPack<DedupedPack> parameters, SPlusOptions options = {})
+        : Optimizer<DedupedPack>(parameters), options_(options) {
           assert(std::apply([](auto&... param_vecs) {
             return (std::all_of(param_vecs.begin(), param_vecs.end(),
               [](auto& p) { return p.get().rank() >= 2; }) && ...
@@ -59,12 +63,15 @@ namespace mirage::optim {
               auto& ema = std::get<detail::ExtractType_t<ParamType>>(this->state_.param_ema);
               for (auto& param_ref : param_vec) {
                 auto& param = param_ref.get();
+                size_t l_numel = param.size(0) * param.size(0);
+                size_t r_numel = param.strides(0) * param.strides(0);
+
                 using T = typename ParamType::DataType;
                 mom.insert(mom.end(), param.numel(), T(0));
-                lvel.insert(lvel.end(), param.numel(), T(0));
-                rvel.insert(rvel.end(), param.numel(), T(0));
-                leig.insert(leig.end(), param.numel(), T(0));
-                reig.insert(reig.end(), param.numel(), T(0));
+                lvel.insert(lvel.end(), l_numel, T(0));
+                rvel.insert(rvel.end(), r_numel, T(0));
+                leig.insert(leig.end(), l_numel, T(0));
+                reig.insert(reig.end(), r_numel, T(0));
                 ema.insert(ema.end(), param.numel(), T(0));
               }
             }(param_vecs), ...);
@@ -82,25 +89,72 @@ namespace mirage::optim {
 
             size_t state_offset = 0;
             for (auto param_ref : param_vec) {
-              auto& param = param_ref.get();
+              auto& param_og = param_ref.get();
               using T = typename ParamType::DataType;
+              size_t width = param_og.size(0);
+              size_t height = param_og.strides(0);
 
-              auto& grad_full = param.grad();
-              auto& data_full = param.data();
+              auto& param_tp = param_og.copy();
+              param_tp.view(width, height);
+              param_tp.transpose(0, 1);
+              param_tp.view(param_og.size());
+
+              auto& mom_slice = std::span(mom_full).subspan(state_offset, param_og.numel() - 1);
+              auto& rvel_slice = std::span(rvel_full).subspan(state_offset, param_og.numel() - 1);
+              auto& lvel_slice = std::span(lvel_full).subspan(state_offset, param_og.numel() - 1);
+              auto& ema_slice = std::span(ema_full).subspan(state_offset, param_og.numel() - 1);
+
+              auto& og_grad_full = param_og.grad();
+              auto& tp_grad_full = param_tp.grad();
+              auto& data_full = param_og.data();
 
               constexpr size_t vec_size = eve::wide<T>::size();
+              constexpr size_t unroll_factor = detail::UNROLL_FACTOR;
+
+              const auto [width_chunk, height_chunk] = [&]() {
+                if (options_.num_proc % 2) {
+                  return std::make_pair((width + options_.num_proc - 1) / options_.num_proc, height);
+                } 
+                return std::make_pair((2 * width + options_.num_proc - 1) / options_.num_proc, (height + 1) / 2);
+              }();
 
               std::vector<std::thread> threads;
-              size_t chunk_size = (param.numel() + num_proc_ - 1) / num_proc_;
-
-              for (size_t t = 0; t < num_proc_; ++t) {
+              for (size_t t = 0; t < options_.num_proc; ++t) {
                 threads.emplace_back([&, t]() {
-                  size_t start = t * chunk_size;
-                  size_t end = std::min(start + chunk_size, param.numel());
+                  const auto [x_off, y_off] = [&]() {
+                    if (options_.num_proc % 2) {
+                      return std::make_pair(t * width_chunk, 0);
+                    }
+                    return std::make_pair((t / 2) * width_chunk, (t % 2) * height_chunk);
+                  }();
 
-                  size_t i = start;
+                  detail::symmetrized_ema_tile(
+                    og_grad_full, 
+                    tp_grad_full, 
+                    lvel_slice,
+                    width, 
+                    height, 
+                    std::min(width_chunk, width - x_off), 
+                    std::min(width_chunk, width - x_off), 
+                    x_off, 
+                    y_off, 
+                    options_.beta2
+                  );
 
-                  // TODO: matmuls
+                  detail::symmetrized_ema_tile(
+                    tp_grad_full, 
+                  og_grad_full, 
+                    rvel_slice,
+                    height, 
+                    width, 
+                    height_chunk, 
+                    height_chunk, 
+                    x_off, 
+                    y_off, 
+                    options_.beta2
+                  );
+
+                  // TODO: the rest of the optimizer step
                 });
               }
 
@@ -194,6 +248,5 @@ namespace mirage::optim {
     private:
       SPlusOptions options_;
       SPlusState<DedupedPack> state_;
-      int num_proc_ = 1;
   };
 }

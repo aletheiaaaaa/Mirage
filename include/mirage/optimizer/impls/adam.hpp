@@ -19,6 +19,8 @@ namespace mirage::optim {
     bool maximize = false;
     bool use_adazo = false;
 
+    int num_proc = 1;
+
     template<class Archive>
     void serialize(Archive& ar) {
       ar(lr, beta1, beta2, epsilon, lambda, maximize, use_adazo);
@@ -35,8 +37,8 @@ namespace mirage::optim {
     requires detail::NonConstPack<DedupedPack>
   class Adam : public Optimizer<DedupedPack> {
     public:
-      explicit Adam(ParameterPack<DedupedPack> parameters, AdamOptions options = {}, int num_proc = 1)
-        : Optimizer<DedupedPack>(parameters), options_(options), num_proc_(num_proc) {
+      explicit Adam(ParameterPack<DedupedPack> parameters, AdamOptions options = {})
+        : Optimizer<DedupedPack>(parameters), options_(options) {
           std::apply([&](auto&... param_vecs) {
             ([&](auto& param_vec) {
               using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
@@ -71,9 +73,9 @@ namespace mirage::optim {
               constexpr size_t unroll_factor = detail::UNROLL_FACTOR;
 
               std::vector<std::thread> threads;
-              size_t chunk_size = (param.numel() + num_proc_ - 1) / num_proc_;
+              size_t chunk_size = (param.numel() + options_.num_proc - 1) / options_.num_proc;
 
-              for (size_t t = 0; t < num_proc_; ++t) {
+              for (size_t t = 0; t < options_.num_proc; ++t) {
                 threads.emplace_back([&, t]() {
                   size_t start = t * chunk_size;
                   size_t end = std::min(start + chunk_size, param.numel());
@@ -220,6 +222,5 @@ namespace mirage::optim {
     private:
       AdamOptions options_;
       AdamState<DedupedPack> state_;
-      int num_proc_;
   };
 }

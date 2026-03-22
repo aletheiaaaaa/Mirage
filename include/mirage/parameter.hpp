@@ -75,17 +75,43 @@ namespace mirage {
       };
     }
 
-    inline std::vector<int> compute_indices(
+    template<typename T>
+    inline void collect(
+      std::vector<T>& source,
+      std::vector<T>& target,
+      std::vector<int>& indices,
+      size_t max
+    ) {
+      constexpr size_t vec_size = eve::wide<T>::size();
+      constexpr size_t unroll_factor = detail::UNROLL_FACTOR;
+
+      size_t i = 0;
+      for (; i + vec_size * unroll_factor < max; i += vec_size * unroll_factor) {
+        detail::unroll<unroll_factor>([&]<size_t index>() {
+          constexpr size_t offset = index * vec_size;
+
+          eve::wide<int32_t, eve::fixed<vec_size>> gather_idxs(&indices[i + offset]);
+          eve::wide<T> idxs = eve::gather(source.data(), gather_idxs);
+          eve::store(idxs, &target[i + offset]);
+        });
+      }
+
+      for (; i < max; ++i) {
+        target[i] = source[indices[i]];
+      }
+    }
+
+    inline std::vector<int> compute_view_idx(
       size_t offset,
       std::span<const size_t> shape,
       std::span<const size_t> strides
     ) {
-      size_t out_numel = std::accumulate(shape.begin(), shape.end(), size_t{1}, std::multiplies<size_t>{});
-      std::vector<int> indices(out_numel, 0);
+      size_t numel = std::accumulate(shape.begin(), shape.end(), size_t{1}, std::multiplies<size_t>{});
+      std::vector<int> indices(numel, 0);
       std::vector<int> coord(shape.size(), 0);
 
       size_t current_idx = offset;
-      for (size_t i = 0; i < out_numel; ++i) {
+      for (size_t i = 0; i < numel; ++i) {
         indices[i] = current_idx;
 
         for (size_t d = shape.size(); d-- > 0; ) {
@@ -100,6 +126,29 @@ namespace mirage {
       }
 
       return indices;
+    }
+
+    inline std::vector<int> compute_transpose_idx(
+      size_t idx0,
+      size_t idx1,
+      std::span<const size_t> shape,
+      std::span<const size_t> strides
+    ) {
+      size_t numel = std::accumulate(shape.begin(), shape.end(), (size_t)1, std::multiplies<size_t>());
+      std::vector<int> indices = compute_view_idx(0, shape, strides);
+      std::vector<int> new_indices(indices.size(), 0);
+
+      std::vector<size_t> new_shape(shape.begin(), shape.end());
+      std::vector<size_t> new_strides(strides.begin(), strides.end());
+
+      std::swap(new_shape[idx0], new_shape[idx1]);
+      std::swap(new_strides[idx0], new_strides[idx1]);
+
+      std::vector<int> gather_indices = compute_view_idx(0, new_shape, new_strides);
+
+      collect(indices, new_indices, gather_indices, numel);
+
+      return new_indices;
     }
   }
 
@@ -144,33 +193,15 @@ namespace mirage {
       }
 
       std::vector<T> materialize() {
-        auto& idx = ensure_indices();
         std::vector<T> result(numel());
-
-        constexpr size_t vec_size = eve::wide<T>::size();
-        const size_t unroll_factor = detail::UNROLL_FACTOR;
-
-        int i = 0;
-        for (; i + vec_size * unroll_factor <= result.size(); i += vec_size * unroll_factor) {
-          detail::unroll<unroll_factor>([&]<size_t index>() {
-            constexpr size_t off = index * vec_size;
-
-            eve::wide<int32_t, eve::fixed<vec_size>> idx_wide(&idx[i + off]);
-            auto vals = eve::gather(data().data(), idx_wide);
-            eve::store(vals, &result[i + off]);
-          });
-        }
-
-        for (; i < numel(); ++i) {
-          result[i] = data()[idx[i]];
-        }
+        collect(data(), result, indices());
 
         return result;
       }
 
       void fill(const std::span<T>& new_data) {
         assert(new_data.size() == numel() && "Data size does not match view size");
-        auto& idx = ensure_indices();
+        auto& idx = indices();
 
         constexpr size_t vec_size = eve::wide<T>::size();
         const size_t unroll_factor = detail::UNROLL_FACTOR;
@@ -197,7 +228,7 @@ namespace mirage {
       View& operator=(const S& new_data) {
         auto new_shape = detail::deduce_shape(new_data);
         assert(new_shape == shape_ && "Cannot assign to view with data of different shape");
-        auto& idx = ensure_indices();
+        auto& idx = indices();
 
         detail::fill(new_data, new_shape, [&](const auto& leaf, size_t offset) {
           int i = 0;
@@ -246,9 +277,9 @@ namespace mirage {
       std::vector<size_t> strides_;
       std::vector<int> indices_;
 
-      std::vector<int>& ensure_indices() {
+      std::vector<int>& indices() {
         if (indices_.empty() && !shape_.empty()) {
-          indices_ = detail::compute_indices(offset_, shape_, strides_);
+          indices_ = detail::compute_view_idx(offset_, shape_, strides_);
         }
         return indices_;
       }
@@ -304,28 +335,28 @@ namespace mirage {
       void contiguous() {
         if (is_contiguous()) return;
 
-        std::vector<T> indices = detail::compute_indices(0, shape_, strides_);
+        std::vector<int> indices = detail::compute_view_idx(0, shape_, strides_);
         std::vector<T> new_data(data_.size());
 
-        constexpr size_t vec_size = eve::wide<T>::size();
-        const size_t unroll_factor = detail::UNROLL_FACTOR;
-
-        size_t i = 0;
-        for (; i + vec_size * unroll_factor <= indices.size(); i += vec_size * unroll_factor) {
-          detail::unroll<unroll_factor>([&]<size_t index>() {
-            constexpr size_t off = index * vec_size;
-
-            eve::wide<int32_t, eve::fixed<vec_size>> idx_wide(&indices[i + off]);
-            auto vals = eve::gather(data_.data(), idx_wide);
-            eve::store(vals, &new_data[i + off]);
-          });
-        }
-
-        for (; i < indices.size(); ++i) {
-          new_data[i] = data_[indices[i]];
-        }
-
+        detail::collect(data_, new_data, indices);
         data_ = std::move(new_data);
+
+        std::exclusive_scan(
+          shape_.rbegin(), shape_.rend(), strides_.rbegin(), size_t{1}, std::multiplies<size_t>{}
+        );
+      }
+
+      void transpose(size_t idx0, size_t idx1) {
+        assert(rank() > 1 && "Cannot transpose 1D tensors");
+        assert((idx0 < rank() && idx1 < rank()) && "Transpose indices exceed rank");
+        auto [min, max] = std::minmax(idx0, idx1);
+
+        std::vector<int> indices = detail::compute_transpose_idx(idx0, idx1, shape_, strides_);
+        std::vector<T> new_data(data_.size());
+
+        detail::collect(data_, new_data, indices);
+        data_ = std::move(new_data);
+
         std::exclusive_scan(
           shape_.rbegin(), shape_.rend(), strides_.rbegin(), size_t{1}, std::multiplies<size_t>{}
         );

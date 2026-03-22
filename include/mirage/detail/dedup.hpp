@@ -13,9 +13,9 @@ namespace mirage::detail {
   template<typename T, typename... Ts>
   using AppendIfNotInPack_t = AppendIfNotInPack<T, Ts...>::Type;
 
-  template<template <typename...> typename Trait, typename Tuple>
+  template<template<typename...> typename Trait, typename Tuple>
   struct ApplyPackTraitWithTuple {};
-  template<template <typename...> typename Trait, typename... Ts>
+  template<template<typename...> typename Trait, typename... Ts>
   struct ApplyPackTraitWithTuple<Trait, std::tuple<Ts...>> {
     using Type = Trait<Ts...>;
   };
@@ -38,12 +38,12 @@ namespace mirage::detail {
   template<typename... Ts>
   using DeduplicatedPack_t = DeduplicatedPack<Ts...>::Type;
 
-  template<template <typename...> typename Trait, typename Tuple>
+  template<template<typename...> typename Trait, typename Tuple>
   struct TransformTuple {};
-  template<template <typename...> typename Trait, typename... Ts>
+  template<template<typename...> typename Trait, typename... Ts>
   struct TransformTuple<Trait, std::tuple<Ts...>> {
     using Type = std::tuple<Trait<Ts>...>;
   };
-  template<template <typename...> typename Trait, typename Tuple>
+  template<template<typename...> typename Trait, typename Tuple>
   using TransformTuple_t = TransformTuple<Trait, Tuple>::Type;
 }
