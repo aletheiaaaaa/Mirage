@@ -143,7 +143,7 @@ namespace mirage::optim {
 
                   detail::symmetrized_ema_tile(
                     tp_grad_full, 
-                  og_grad_full, 
+                    og_grad_full, 
                     rvel_slice,
                     height, 
                     width, 
