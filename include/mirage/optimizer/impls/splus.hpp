@@ -111,22 +111,30 @@ namespace mirage::optim {
               constexpr size_t vec_size = eve::wide<T>::size();
               constexpr size_t unroll_factor = detail::UNROLL_FACTOR;
 
-              const auto [width_chunk, height_chunk] = [&]() {
+              auto compute_chunks = [&](size_t chunk_width, size_t chunk_height) {
                 if (options_.num_proc % 2) {
-                  return std::make_pair((width + options_.num_proc - 1) / options_.num_proc, height);
+                  return std::make_pair((chunk_width + options_.num_proc - 1) / options_.num_proc, chunk_height);
                 } 
-                return std::make_pair((2 * width + options_.num_proc - 1) / options_.num_proc, (height + 1) / 2);
-              }();
+                return std::make_pair((2 * chunk_width + options_.num_proc - 1) / options_.num_proc, (chunk_height + 1) / 2);
+              };
+
+              const auto [wh_width, wh_height] = compute_chunks(width, height);
+              const auto [ww_width, ww_height] = compute_chunks(width, width);
+              const auto [hh_width, hh_height] = compute_chunks(height, height);
 
               std::vector<std::thread> threads;
               for (size_t t = 0; t < options_.num_proc; ++t) {
                 threads.emplace_back([&, t]() {
-                  const auto [x_off, y_off] = [&]() {
+                  const auto offsets = [&](size_t chunk_width, size_t chunk_height) {
                     if (options_.num_proc % 2) {
-                      return std::make_pair(t * width_chunk, 0);
+                      return std::make_pair(t * chunk_width, 0);
                     }
-                    return std::make_pair((t / 2) * width_chunk, (t % 2) * height_chunk);
-                  }();
+                    return std::make_pair((t / 2) * chunk_width, (t % 2) * chunk_height);
+                  };
+
+                  const auto [wh_x_off, wh_y_off] = offsets(wh_width, wh_height);
+                  const auto [ww_x_off, ww_y_off] = offsets(ww_width, ww_height);
+                  const auto [hh_x_off, hh_y_off] = offsets(hh_width, hh_height);
 
                   detail::symmetrized_ema_tile(
                     og_grad_full, 
@@ -134,10 +142,10 @@ namespace mirage::optim {
                     lvel_slice,
                     width, 
                     height, 
-                    std::min(width_chunk, width - x_off), 
-                    std::min(width_chunk, width - x_off), 
-                    x_off, 
-                    y_off, 
+                    std::min(ww_width, width - ww_x_off), 
+                    std::min(ww_height, height - ww_y_off), 
+                    ww_x_off, 
+                    ww_y_off, 
                     options_.beta2
                   );
 
@@ -147,10 +155,10 @@ namespace mirage::optim {
                     rvel_slice,
                     height, 
                     width, 
-                    height_chunk, 
-                    height_chunk, 
-                    x_off, 
-                    y_off, 
+                    std::min(hh_width, width - hh_x_off), 
+                    std::min(hh_height, height - hh_y_off), 
+                    hh_x_off, 
+                    hh_y_off, 
                     options_.beta2
                   );
 
