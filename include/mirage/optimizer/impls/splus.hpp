@@ -47,15 +47,19 @@ struct SPlusState : public OptimizerState {
 template <typename DedupedPack>
   requires detail::NonConstPack<DedupedPack>
 class SPlus : public Optimizer<DedupedPack> {
- public:
-  explicit SPlus(ParameterPack<DedupedPack> parameters, SPlusOptions options = {})
+  public:
+  explicit SPlus(
+    ParameterPack<DedupedPack> parameters, SPlusOptions options = {}
+  )
       : Optimizer<DedupedPack>(parameters), options_(options) {
     assert(
       std::apply(
         [](auto&... param_vecs) {
           return (
             std::all_of(
-              param_vecs.begin(), param_vecs.end(), [](auto& p) { return p.get().rank() >= 2; }
+              param_vecs.begin(),
+              param_vecs.end(),
+              [](auto& p) { return p.get().rank() >= 2; }
             ) &&
             ...
           );
@@ -69,14 +73,25 @@ class SPlus : public Optimizer<DedupedPack> {
       [&](auto&... param_vecs) {
         (
           [&](auto& param_vec) {
-            using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
-            auto& mom = std::get<detail::ExtractType_t<ParamType>>(this->state_.momentum);
-            auto& lvel = std::get<detail::ExtractType_t<ParamType>>(this->state_.left_velocity);
-            auto& rvel = std::get<detail::ExtractType_t<ParamType>>(this->state_.right_velocity);
-            auto& leig = std::get<detail::ExtractType_t<ParamType>>(this->state_.left_eigenvectors);
-            auto& reig =
-              std::get<detail::ExtractType_t<ParamType>>(this->state_.right_eigenvectors);
-            auto& ema = std::get<detail::ExtractType_t<ParamType>>(this->state_.param_ema);
+            using ParamType = typename std::remove_cvref_t<
+              decltype(param_vec)>::value_type::type;
+            auto& mom =
+              std::get<detail::ExtractType_t<ParamType>>(this->state_.momentum);
+            auto& lvel = std::get<detail::ExtractType_t<ParamType>>(
+              this->state_.left_velocity
+            );
+            auto& rvel = std::get<detail::ExtractType_t<ParamType>>(
+              this->state_.right_velocity
+            );
+            auto& leig = std::get<detail::ExtractType_t<ParamType>>(
+              this->state_.left_eigenvectors
+            );
+            auto& reig = std::get<detail::ExtractType_t<ParamType>>(
+              this->state_.right_eigenvectors
+            );
+            auto& ema = std::get<detail::ExtractType_t<ParamType>>(
+              this->state_.param_ema
+            );
             for (auto& param_ref : param_vec) {
               auto& param = param_ref.get();
               size_t l_numel = param.size(0) * param.size(0);
@@ -102,13 +117,22 @@ class SPlus : public Optimizer<DedupedPack> {
       [&](auto&... param_vecs) {
         (
           [&](auto& param_vec) {
-            using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
-            auto& mom_full = std::get<detail::ExtractType_t<ParamType>>(state_.momentum);
-            auto& lvel_full = std::get<detail::ExtractType_t<ParamType>>(state_.left_velocity);
-            auto& rvel_full = std::get<detail::ExtractType_t<ParamType>>(state_.right_velocity);
-            auto& leig_full = std::get<detail::ExtractType_t<ParamType>>(state_.left_eigenvectors);
-            auto& reig_full = std::get<detail::ExtractType_t<ParamType>>(state_.right_eigenvectors);
-            auto& ema_full = std::get<detail::ExtractType_t<ParamType>>(state_.param_ema);
+            using ParamType = typename std::remove_cvref_t<
+              decltype(param_vec)>::value_type::type;
+            auto& mom_full =
+              std::get<detail::ExtractType_t<ParamType>>(state_.momentum);
+            auto& lvel_full =
+              std::get<detail::ExtractType_t<ParamType>>(state_.left_velocity);
+            auto& rvel_full =
+              std::get<detail::ExtractType_t<ParamType>>(state_.right_velocity);
+            auto& leig_full = std::get<detail::ExtractType_t<ParamType>>(
+              state_.left_eigenvectors
+            );
+            auto& reig_full = std::get<detail::ExtractType_t<ParamType>>(
+              state_.right_eigenvectors
+            );
+            auto& ema_full =
+              std::get<detail::ExtractType_t<ParamType>>(state_.param_ema);
 
             size_t state_offset = 0;
             for (auto param_ref : param_vec) {
@@ -124,12 +148,18 @@ class SPlus : public Optimizer<DedupedPack> {
 
               size_t numel_off = param_og.numel() - 1;
 
-              auto& mom_slice = std::span(mom_full).subspan(state_offset, numel_off);
-              auto& rvel_slice = std::span(rvel_full).subspan(state_offset, numel_off);
-              auto& lvel_slice = std::span(lvel_full).subspan(state_offset, numel_off);
-              auto& reig_slice = std::span(reig_full).subspan(state_offset, numel_off);
-              auto& leig_slice = std::span(leig_full).subspan(state_offset, numel_off);
-              auto& ema_slice = std::span(ema_full).subspan(state_offset, numel_off);
+              auto& mom_slice =
+                std::span(mom_full).subspan(state_offset, numel_off);
+              auto& rvel_slice =
+                std::span(rvel_full).subspan(state_offset, numel_off);
+              auto& lvel_slice =
+                std::span(lvel_full).subspan(state_offset, numel_off);
+              auto& reig_slice =
+                std::span(reig_full).subspan(state_offset, numel_off);
+              auto& leig_slice =
+                std::span(leig_full).subspan(state_offset, numel_off);
+              auto& ema_slice =
+                std::span(ema_full).subspan(state_offset, numel_off);
 
               auto& og_grad_full = param_og.grad();
               auto& tp_grad_full = param_tp.grad();
@@ -138,10 +168,13 @@ class SPlus : public Optimizer<DedupedPack> {
               constexpr size_t vec_size = eve::wide<T>::size();
               constexpr size_t unroll_factor = detail::UNROLL_FACTOR;
 
-              auto compute_chunks = [&](size_t chunk_width, size_t chunk_height) {
+              auto compute_chunks = [&](
+                                      size_t chunk_width, size_t chunk_height
+                                    ) {
                 if (options_.num_proc % 2) {
                   return std::make_pair(
-                    (chunk_width + options_.num_proc - 1) / options_.num_proc, chunk_height
+                    (chunk_width + options_.num_proc - 1) / options_.num_proc,
+                    chunk_height
                   );
                 }
                 return std::make_pair(
@@ -156,12 +189,15 @@ class SPlus : public Optimizer<DedupedPack> {
 
               std::vector<std::thread> threads;
               for (size_t t = 0; t < options_.num_proc; ++t) {
-                const auto offsets = [&](size_t chunk_width, size_t chunk_height) {
-                  if (options_.num_proc % 2) {
-                    return std::make_pair(t * chunk_width, 0);
-                  }
-                  return std::make_pair((t / 2) * chunk_width, (t % 2) * chunk_height);
-                };
+                const auto offsets =
+                  [&](size_t chunk_width, size_t chunk_height) {
+                    if (options_.num_proc % 2) {
+                      return std::make_pair(t * chunk_width, 0);
+                    }
+                    return std::make_pair(
+                      (t / 2) * chunk_width, (t % 2) * chunk_height
+                    );
+                  };
 
                 const auto [wh_x_off, wh_y_off] = offsets(wh_width, wh_height);
                 const auto [ww_x_off, ww_y_off] = offsets(ww_width, ww_height);
@@ -212,7 +248,8 @@ class SPlus : public Optimizer<DedupedPack> {
                 thread.join();
               }
 
-              using Matrix = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+              using Matrix = Eigen::
+                Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
               Eigen::Map<Matrix> lvel_format(lvel_full, width, width);
               Eigen::Map<Matrix> rvel_format(rvel_full, height, height);
@@ -234,12 +271,16 @@ class SPlus : public Optimizer<DedupedPack> {
                   if (options_.num_proc % 2) {
                     return std::make_pair(t * wh_width, 0);
                   }
-                  return std::make_pair((t / 2) * wh_width, (t % 2) * wh_height);
+                  return std::make_pair(
+                    (t / 2) * wh_width, (t % 2) * wh_height
+                  );
                 }();
 
                 threads.emplace_back([&, t]() {
                   detail::triple_matmul_sign(
-                    detail::transpose(std::vector(leig_slice.begin(), leig_slice.end())),
+                    detail::transpose(
+                      std::vector(leig_slice.begin(), leig_slice.end())
+                    ),
                     mom_slice,
                     std::vector(reig_slice.begin(), reig_slice.end()),
                     temp,
@@ -266,14 +307,18 @@ class SPlus : public Optimizer<DedupedPack> {
                   if (options_.num_proc % 2) {
                     return std::make_pair(t * wh_width, 0);
                   }
-                  return std::make_pair((t / 2) * wh_width, (t % 2) * wh_height);
+                  return std::make_pair(
+                    (t / 2) * wh_width, (t % 2) * wh_height
+                  );
                 }();
 
                 threads.emplace_back([&, t]() {
                   detail::triple_matmul_tile(
                     std::vector(leig_slice.begin(), leig_slice.end()),
                     mom_slice,
-                    detail::transpose(std::vector(reig_slice.begin(), reig_slice.end())),
+                    detail::transpose(
+                      std::vector(reig_slice.begin(), reig_slice.end())
+                    ),
                     update,
                     width,
                     width,
@@ -284,9 +329,31 @@ class SPlus : public Optimizer<DedupedPack> {
                     x_off,
                     y_off
                   );
-                });
 
-                // TODO actual gradient update, dependent on updating detail/matrix
+                  detail::fma_tile(
+                    update,
+                    ema_slice,
+                    width,
+                    height,
+                    wh_width,
+                    wh_height,
+                    x_off,
+                    y_off,
+                    options_.lr
+                  );
+
+                  detail::ema_tile(
+                    ema_slice,
+                    data_full,
+                    width,
+                    height,
+                    wh_width,
+                    wh_height,
+                    x_off,
+                    y_off,
+                    options_.beta3
+                  );
+                });
               }
 
               for (auto& thread : threads) {
@@ -305,7 +372,8 @@ class SPlus : public Optimizer<DedupedPack> {
     std::filesystem::path path(path_str);
     path.replace_extension(".bin");
 
-    if (!std::filesystem::exists(path)) throw std::runtime_error("File not found: " + path_str);
+    if (!std::filesystem::exists(path))
+      throw std::runtime_error("File not found: " + path_str);
 
     std::ifstream in(path, std::ios::binary);
     if (!in) throw std::runtime_error("Failed to open file: " + path_str);
@@ -380,7 +448,8 @@ class SPlus : public Optimizer<DedupedPack> {
       [&](auto&... param_vecs) {
         (
           [&](auto& param_vec) {
-            using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
+            using ParamType = typename std::remove_cvref_t<
+              decltype(param_vec)>::value_type::type;
 
             if (!first) type += ", ";
             first = false;
@@ -409,7 +478,7 @@ class SPlus : public Optimizer<DedupedPack> {
     return type;
   }
 
- private:
+  private:
   SPlusOptions options_;
   SPlusState<DedupedPack> state_;
 };

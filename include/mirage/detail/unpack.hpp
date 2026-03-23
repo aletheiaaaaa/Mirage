@@ -22,16 +22,26 @@ template <typename T, size_t E>
 struct span_scalar<std::span<T, E>> : span_scalar<T> {};
 
 template <typename S, typename T>
-concept NestedSpan = is_span<S>::value && std::is_same_v<typename span_scalar<S>::type, T>;
+concept NestedSpan =
+  is_span<S>::value && std::is_same_v<typename span_scalar<S>::type, T>;
 
 template <typename S, typename F>
   requires is_span<S>::value
-void walk(const S& span, std::vector<size_t>& shape, size_t& offset, bool first, F&& func) {
+void walk(
+  const S& span,
+  std::vector<size_t>& shape,
+  size_t& offset,
+  bool first,
+  F&& func
+) {
   if (first) shape.push_back(span.size());
 
   if constexpr (is_span<typename S::element_type>::value) {
     for (const auto& sub : span) {
-      assert(sub.size() == span[0].size() && "Inconsistent inner dimensions in nested span");
+      assert(
+        sub.size() == span[0].size() &&
+        "Inconsistent inner dimensions in nested span"
+      );
       walk(sub, shape, offset, first && (&sub == &span[0]), func);
     }
   } else {
@@ -68,24 +78,41 @@ void unpack(
 ) {
   shape = deduce_shape(span);
 
-  size_t numel = std::accumulate(shape.begin(), shape.end(), size_t{1}, std::multiplies<size_t>{});
+  size_t numel = std::accumulate(
+    shape.begin(), shape.end(), size_t{1}, std::multiplies<size_t>{}
+  );
   data.resize(numel);
 
-  fill(span, shape, [&](const auto& leaf, size_t off) { func(leaf, data, off); });
+  fill(span, shape, [&](const auto& leaf, size_t off) {
+    func(leaf, data, off);
+  });
 
   strides.resize(shape.size());
   std::exclusive_scan(
-    shape.rbegin(), shape.rend(), strides.rbegin(), size_t{1}, std::multiplies<size_t>{}
+    shape.rbegin(),
+    shape.rend(),
+    strides.rbegin(),
+    size_t{1},
+    std::multiplies<size_t>{}
   );
 }
 
 template <typename S, typename T>
   requires NestedSpan<S, T>
 void unpack(
-  const S& span, std::vector<size_t>& shape, std::vector<T>& data, std::vector<size_t>& strides
+  const S& span,
+  std::vector<size_t>& shape,
+  std::vector<T>& data,
+  std::vector<size_t>& strides
 ) {
-  unpack(span, shape, data, strides, [](const auto& leaf, std::vector<T>& out, size_t off) {
-    std::copy(leaf.begin(), leaf.end(), out.begin() + off);
-  });
+  unpack(
+    span,
+    shape,
+    data,
+    strides,
+    [](const auto& leaf, std::vector<T>& out, size_t off) {
+      std::copy(leaf.begin(), leaf.end(), out.begin() + off);
+    }
+  );
 }
 }  // namespace mirage::detail

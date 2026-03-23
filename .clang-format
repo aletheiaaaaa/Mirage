@@ -1,5 +1,4 @@
 BasedOnStyle: Google
-ColumnLimit: 100
 
 BinPackArguments: false
 BinPackParameters: false
@@ -8,3 +7,5 @@ AlignAfterOpenBracket: BlockIndent
 
 IndentWidth: 2
 ContinuationIndentWidth: 2
+AccessModifierOffset: 0
+IndentAccessModifiers: false

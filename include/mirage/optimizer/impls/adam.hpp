@@ -36,16 +36,19 @@ struct AdamState : public OptimizerState {
 template <typename DedupedPack>
   requires detail::NonConstPack<DedupedPack>
 class Adam : public Optimizer<DedupedPack> {
- public:
+  public:
   explicit Adam(ParameterPack<DedupedPack> parameters, AdamOptions options = {})
       : Optimizer<DedupedPack>(parameters), options_(options) {
     std::apply(
       [&](auto&... param_vecs) {
         (
           [&](auto& param_vec) {
-            using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
-            auto& mom = std::get<detail::ExtractType_t<ParamType>>(this->state_.momentum);
-            auto& vel = std::get<detail::ExtractType_t<ParamType>>(this->state_.velocity);
+            using ParamType = typename std::remove_cvref_t<
+              decltype(param_vec)>::value_type::type;
+            auto& mom =
+              std::get<detail::ExtractType_t<ParamType>>(this->state_.momentum);
+            auto& vel =
+              std::get<detail::ExtractType_t<ParamType>>(this->state_.velocity);
             for (auto& param_ref : param_vec) {
               auto& param = param_ref.get();
               using T = typename ParamType::DataType;
@@ -64,9 +67,12 @@ class Adam : public Optimizer<DedupedPack> {
       [&](auto&... param_vecs) {
         (
           [&](auto& param_vec) {
-            using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
-            auto& mom_full = std::get<detail::ExtractType_t<ParamType>>(state_.momentum);
-            auto& vel_full = std::get<detail::ExtractType_t<ParamType>>(state_.velocity);
+            using ParamType = typename std::remove_cvref_t<
+              decltype(param_vec)>::value_type::type;
+            auto& mom_full =
+              std::get<detail::ExtractType_t<ParamType>>(state_.momentum);
+            auto& vel_full =
+              std::get<detail::ExtractType_t<ParamType>>(state_.velocity);
 
             size_t state_offset = 0;
             for (auto param_ref : param_vec) {
@@ -80,7 +86,8 @@ class Adam : public Optimizer<DedupedPack> {
               constexpr size_t unroll_factor = detail::UNROLL_FACTOR;
 
               std::vector<std::thread> threads;
-              size_t chunk_size = (param.numel() + options_.num_proc - 1) / options_.num_proc;
+              size_t chunk_size =
+                (param.numel() + options_.num_proc - 1) / options_.num_proc;
 
               for (size_t t = 0; t < options_.num_proc; ++t) {
                 threads.emplace_back([&, t]() {
@@ -88,7 +95,8 @@ class Adam : public Optimizer<DedupedPack> {
                   size_t end = std::min(start + chunk_size, param.numel());
 
                   size_t i = start;
-                  for (; i + vec_size * unroll_factor <= end; i += vec_size * unroll_factor) {
+                  for (; i + vec_size * unroll_factor <= end;
+                       i += vec_size * unroll_factor) {
                     detail::unroll<unroll_factor>([&]<size_t index>() {
                       constexpr size_t offset = index * vec_size;
 
@@ -103,20 +111,25 @@ class Adam : public Optimizer<DedupedPack> {
                       mom = eve::fnma(beta1, grad, mom);
 
                       eve::wide<T> beta2(options_.beta2);
-                      auto grad_squared =
-                        (options_.use_adazo) ? eve::mul(mom, mom) : eve::mul(grad, grad);
+                      auto grad_squared = (options_.use_adazo)
+                                            ? eve::mul(mom, mom)
+                                            : eve::mul(grad, grad);
                       vel = eve::fma(beta2, vel, grad_squared);
                       vel = eve::fnma(beta2, grad_squared, vel);
 
                       eve::store(mom, &mom_full[state_offset + i + offset]);
                       eve::store(vel, &vel_full[state_offset + i + offset]);
 
-                      auto update =
-                        eve::div(mom, eve::add(eve::sqrt(vel), eve::wide<T>(options_.epsilon)));
+                      auto update = eve::div(
+                        mom,
+                        eve::add(eve::sqrt(vel), eve::wide<T>(options_.epsilon))
+                      );
                       eve::wide<T> data(&data_full[i + offset]);
 
                       if (options_.lambda)
-                        update = eve::fnma(eve::wide<T>(options_.lambda), data, update);
+                        update = eve::fnma(
+                          eve::wide<T>(options_.lambda), data, update
+                        );
                       data = eve::fma(eve::wide<T>(options_.lr), update, data);
                       eve::store(data, &data_full[i + offset]);
                     });
@@ -125,8 +138,8 @@ class Adam : public Optimizer<DedupedPack> {
                   for (; i < end; ++i) {
                     T grad = options_.maximize ? -grad_full[i] : grad_full[i];
 
-                    T mom =
-                      options_.beta1 * mom_full[state_offset + i] + (1 - options_.beta1) * grad;
+                    T mom = options_.beta1 * mom_full[state_offset + i] +
+                            (1 - options_.beta1) * grad;
                     T vel = options_.beta2 * vel_full[state_offset + i] +
                             (1 - options_.beta2) * grad * grad;
 
@@ -134,7 +147,8 @@ class Adam : public Optimizer<DedupedPack> {
                     vel_full[state_offset + i] = vel;
 
                     T update = mom / (std::sqrt(vel) + options_.epsilon);
-                    if (options_.lambda) update = -options_.lambda * data_full[i] + update;
+                    if (options_.lambda)
+                      update = -options_.lambda * data_full[i] + update;
 
                     data_full[i] += options_.lr * update;
                   }
@@ -159,7 +173,8 @@ class Adam : public Optimizer<DedupedPack> {
     std::filesystem::path path(path_str);
     path.replace_extension(".bin");
 
-    if (!std::filesystem::exists(path)) throw std::runtime_error("File not found: " + path_str);
+    if (!std::filesystem::exists(path))
+      throw std::runtime_error("File not found: " + path_str);
 
     std::ifstream in(path, std::ios::binary);
     if (!in) throw std::runtime_error("Failed to open file: " + path_str);
@@ -220,7 +235,8 @@ class Adam : public Optimizer<DedupedPack> {
       [&](auto&... param_vecs) {
         (
           [&](auto& param_vec) {
-            using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
+            using ParamType = typename std::remove_cvref_t<
+              decltype(param_vec)>::value_type::type;
 
             if (!first) type += ", ";
             first = false;
@@ -249,7 +265,7 @@ class Adam : public Optimizer<DedupedPack> {
     return type;
   }
 
- private:
+  private:
   AdamOptions options_;
   AdamState<DedupedPack> state_;
 };
