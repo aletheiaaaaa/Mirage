@@ -7,7 +7,6 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -183,70 +182,66 @@ class SPlus : public Optimizer<DedupedPack> {
                 );
               };
 
+              const auto offsets =
+                [&](size_t id, size_t chunk_width, size_t chunk_height) {
+                  if (options_.num_proc % 2) {
+                    return std::make_pair(id * chunk_width, 0);
+                  }
+                  return std::make_pair(
+                    (id / 2) * chunk_width, (id % 2) * chunk_height
+                  );
+                };
+
               const auto [wh_width, wh_height] = compute_chunks(width, height);
               const auto [ww_width, ww_height] = compute_chunks(width, width);
               const auto [hh_width, hh_height] = compute_chunks(height, height);
 
-              std::vector<std::thread> threads;
-              for (size_t t = 0; t < options_.num_proc; ++t) {
-                const auto offsets =
-                  [&](size_t chunk_width, size_t chunk_height) {
-                    if (options_.num_proc % 2) {
-                      return std::make_pair(t * chunk_width, 0);
-                    }
-                    return std::make_pair(
-                      (t / 2) * chunk_width, (t % 2) * chunk_height
-                    );
-                  };
+              detail::parallel<options_.num_proc>([&]<size_t index>() {
+                const auto [wh_x_off, wh_y_off] =
+                  offsets(index, wh_width, wh_height);
+                const auto [ww_x_off, ww_y_off] =
+                  offsets(index, ww_width, ww_height);
+                const auto [hh_x_off, hh_y_off] =
+                  offsets(index, hh_width, hh_height);
 
-                const auto [wh_x_off, wh_y_off] = offsets(wh_width, wh_height);
-                const auto [ww_x_off, ww_y_off] = offsets(ww_width, ww_height);
-                const auto [hh_x_off, hh_y_off] = offsets(hh_width, hh_height);
+                detail::symmetrized_ema_tile(
+                  og_grad_full,
+                  tp_grad_full,
+                  lvel_slice,
+                  width,
+                  height,
+                  std::min(ww_width, width - ww_x_off),
+                  std::min(ww_height, height - ww_y_off),
+                  ww_x_off,
+                  ww_y_off,
+                  options_.beta2
+                );
 
-                threads.emplace_back([&, t]() {
-                  detail::symmetrized_ema_tile(
-                    og_grad_full,
-                    tp_grad_full,
-                    lvel_slice,
-                    width,
-                    height,
-                    std::min(ww_width, width - ww_x_off),
-                    std::min(ww_height, height - ww_y_off),
-                    ww_x_off,
-                    ww_y_off,
-                    options_.beta2
-                  );
+                detail::symmetrized_ema_tile(
+                  tp_grad_full,
+                  og_grad_full,
+                  rvel_slice,
+                  height,
+                  width,
+                  std::min(hh_width, width - hh_x_off),
+                  std::min(hh_height, height - hh_y_off),
+                  hh_x_off,
+                  hh_y_off,
+                  options_.beta2
+                );
 
-                  detail::symmetrized_ema_tile(
-                    tp_grad_full,
-                    og_grad_full,
-                    rvel_slice,
-                    height,
-                    width,
-                    std::min(hh_width, width - hh_x_off),
-                    std::min(hh_height, height - hh_y_off),
-                    hh_x_off,
-                    hh_y_off,
-                    options_.beta2
-                  );
-
-                  detail::ema_tile(
-                    og_grad_full,
-                    mom_slice,
-                    width,
-                    height,
-                    std::min(wh_width, width - wh_x_off),
-                    std::min(wh_height, height - wh_y_off),
-                    wh_x_off,
-                    wh_y_off,
-                    options_.beta1
-                  );
-                });
-              }
-
-              for (auto& thread : threads) {
-                thread.join();
-              }
+                detail::ema_tile(
+                  og_grad_full,
+                  mom_slice,
+                  width,
+                  height,
+                  std::min(wh_width, width - wh_x_off),
+                  std::min(wh_height, height - wh_y_off),
+                  wh_x_off,
+                  wh_y_off,
+                  options_.beta1
+                );
+              });
 
               using Matrix = Eigen::
                 Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
@@ -263,102 +258,75 @@ class SPlus : public Optimizer<DedupedPack> {
               Eigen::Map<Matrix>(leig_slice, width, width) = leig_new;
               Eigen::Map<Matrix>(reig_slice, height, height) = reig_new;
 
-              threads.clear();
               std::vector<T> temp;
-              temp.reserve(param_og.numel());
-              for (size_t t = 0; t < options_.num_proc; ++t) {
-                const auto [x_off, y_off] = [&]() {
-                  if (options_.num_proc % 2) {
-                    return std::make_pair(t * wh_width, 0);
-                  }
-                  return std::make_pair(
-                    (t / 2) * wh_width, (t % 2) * wh_height
-                  );
-                }();
+              detail::parallel<options_.num_proc>([&]<size_t index>() {
+                const auto [x_off, y_off] = offsets(index, wh_width, wh_height);
 
-                threads.emplace_back([&, t]() {
-                  detail::triple_matmul_sign(
-                    detail::transpose(
-                      std::vector(leig_slice.begin(), leig_slice.end())
-                    ),
-                    mom_slice,
-                    std::vector(reig_slice.begin(), reig_slice.end()),
-                    temp,
-                    width,
-                    width,
-                    height,
-                    height,
-                    wh_width,
-                    wh_height,
-                    x_off,
-                    y_off
-                  );
-                });
-              }
+                detail::triple_matmul_sign(
+                  detail::transpose(
+                    std::vector(leig_slice.begin(), leig_slice.end())
+                  ),
+                  mom_slice,
+                  std::vector(reig_slice.begin(), reig_slice.end()),
+                  temp,
+                  width,
+                  width,
+                  height,
+                  height,
+                  wh_width,
+                  wh_height,
+                  x_off,
+                  y_off
+                );
+              });
 
-              for (auto& thread : threads) {
-                thread.join();
-              }
-
-              threads.clear();
               std::vector<T> update;
-              for (size_t t = 0; t < options_.num_proc; ++t) {
-                const auto [x_off, y_off] = [&]() {
-                  if (options_.num_proc % 2) {
-                    return std::make_pair(t * wh_width, 0);
-                  }
-                  return std::make_pair(
-                    (t / 2) * wh_width, (t % 2) * wh_height
-                  );
-                }();
+              detail::parallel<options_.num_proc>([&]<size_t index>() {
+                const auto [x_off, y_off] = offsets(index, wh_width, wh_height);
 
-                threads.emplace_back([&, t]() {
-                  detail::triple_matmul_tile(
-                    std::vector(leig_slice.begin(), leig_slice.end()),
-                    mom_slice,
-                    detail::transpose(
-                      std::vector(reig_slice.begin(), reig_slice.end())
-                    ),
-                    update,
-                    width,
-                    width,
-                    height,
-                    height,
-                    wh_width,
-                    wh_height,
-                    x_off,
-                    y_off
-                  );
+                detail::triple_matmul_tile(
+                  std::vector(leig_slice.begin(), leig_slice.end()),
+                  mom_slice,
+                  detail::transpose(
+                    std::vector(reig_slice.begin(), reig_slice.end())
+                  ),
+                  update,
+                  width,
+                  width,
+                  height,
+                  height,
+                  wh_width,
+                  wh_height,
+                  x_off,
+                  y_off
+                );
 
-                  detail::fma_tile(
-                    update,
-                    ema_slice,
-                    width,
-                    height,
-                    wh_width,
-                    wh_height,
-                    x_off,
-                    y_off,
-                    options_.lr
-                  );
+                detail::fma_tile(
+                  update,
+                  ema_slice,
+                  width,
+                  height,
+                  wh_width,
+                  wh_height,
+                  x_off,
+                  y_off,
+                  options_.lr
+                );
 
-                  detail::ema_tile(
-                    ema_slice,
-                    data_full,
-                    width,
-                    height,
-                    wh_width,
-                    wh_height,
-                    x_off,
-                    y_off,
-                    options_.beta3
-                  );
-                });
-              }
+                detail::ema_tile(
+                  ema_slice,
+                  data_full,
+                  width,
+                  height,
+                  wh_width,
+                  wh_height,
+                  x_off,
+                  y_off,
+                  options_.beta3
+                );
+              });
 
-              for (auto& thread : threads) {
-                thread.join();
-              }
+              state_offset += param_og.numel();
             }
           }(param_vecs),
           ...);

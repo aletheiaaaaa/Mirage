@@ -5,6 +5,7 @@
 #include <eve/module/core.hpp>
 #include <eve/wide.hpp>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -44,10 +45,21 @@ constexpr int OUTER_REGS = UNROLL_FACTOR * 2;
 constexpr int INNER_REGS = std::max(1, UNROLL_FACTOR / 2);
 
 template <size_t N, typename F>
-constexpr void unroll(F&& func) {
+  requires std::is_invocable_v<F>
+constexpr inline void unroll(F&& func) {
   [&]<size_t... Is>(std::index_sequence<Is...>) {
     (func.template operator()<Is>(), ...);
   }(std::make_index_sequence<N>{});
+}
+
+template <size_t N, typename F>
+  requires std::is_invocable_v<F>
+inline void parallel(F&& func) {
+  std::array<std::thread, N> threads;
+  [&]<size_t... Is>(std::index_sequence<Is...>) {
+    (threads.emplace_back(func.template operator()<Is>()), ...);
+  }(std::make_index_sequence<N>{});
+  std::apply([&](auto& thread) { thread.join(); }, threads);
 }
 
 template <typename T>
