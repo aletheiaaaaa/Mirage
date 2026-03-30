@@ -3,7 +3,6 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
-#include <thread>
 
 #include "../../detail/utils.hpp"
 #include "../optimizer.hpp"
@@ -75,32 +74,32 @@ class SGD : public Optimizer<DedupedPack> {
               constexpr int vec_size = eve::wide<T>::size();
               constexpr int unroll_factor = detail::UNROLL_FACTOR;
 
-              std::vector<std::thread> threads;
               int chunk_size = (param.numel() + options_.num_proc - 1) / options_.num_proc;
 
-              for (int t = 0; t < options_.num_proc; ++t) {
-                threads.emplace_back([&, t]() {
-                  int start = t * chunk_size;
+              detail::parallel(
+                [&](int i) {
+                  int start = i * chunk_size;
                   int end = std::min(start + chunk_size, param.numel());
 
-                  int i = start;
-                  for (; i + vec_size * unroll_factor <= end; i += vec_size * unroll_factor) {
+                  int j = start;
+                  for (; j + vec_size * unroll_factor <= end; j += vec_size * unroll_factor) {
                     detail::unroll<unroll_factor>([&]<int index>() {
                       constexpr int offset = index * vec_size;
 
-                      eve::wide<T> grad(&grad_full[i + offset]);
-                      eve::wide<T> mom(&mom_full[state_offset + i + offset]);
-                      eve::wide<T> data(&data_full[i + offset]);
+                      eve::wide<T> grad(&grad_full[j + offset]);
+                      eve::wide<T> mom(&mom_full[state_offset + j + offset]);
+                      eve::wide<T> data(&data_full[j + offset]);
 
                       if (options_.maximize) grad = -grad;
 
                       auto update = [&]() {
                         if (options_.momentum) {
                           mom = eve::fma(eve::wide<T>(options_.momentum), mom, grad);
-                          eve::store(mom, &mom_full[state_offset + i + offset]);
+                          eve::store(mom, &mom_full[state_offset + j + offset]);
 
-                          if (options_.nesterov)
-                            grad = eve::fma(eve::wide<T>(options_.momentum), mom, grad);
+                          grad = (options_.nesterov)
+                                   ? eve::fma(eve::wide<T>(options_.momentum), mom, grad)
+                                   : mom;
                         }
                         if (options_.lambda)
                           grad = eve::fma(eve::wide<T>(options_.lambda), data, grad);
@@ -109,27 +108,23 @@ class SGD : public Optimizer<DedupedPack> {
                       }();
 
                       data = eve::fma(eve::wide<T>(options_.lr), update, data);
-                      eve::store(data, &data_full[i + offset]);
+                      eve::store(data, &data_full[j + offset]);
                     });
                   }
 
-                  for (; i < end; ++i) {
-                    T grad = options_.maximize ? -grad_full[i] : grad_full[i];
-                    T mom = options_.momentum * mom_full[state_offset + i] + grad;
-                    mom_full[state_offset + i] = mom;
+                  for (; j < end; ++j) {
+                    T grad = options_.maximize ? -grad_full[j] : grad_full[j];
+                    T mom = options_.momentum * mom_full[state_offset + j] + grad;
+                    mom_full[state_offset + j] = mom;
 
                     T update = options_.nesterov ? (options_.momentum * mom + grad) : mom;
-                    if (options_.lambda) update = update - options_.lambda * data_full[i];
+                    if (options_.lambda) update = update - options_.lambda * data_full[j];
 
-                    data_full[i] += options_.lr * update;
+                    data_full[j] += options_.lr * update;
                   }
-                });
-              }
-
-              for (auto& thread : threads) {
-                thread.join();
-              }
-
+                },
+                options_.num_proc
+              );
               state_offset += param.numel();
             }
           }(param_vecs),

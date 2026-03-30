@@ -3,7 +3,6 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
-#include <thread>
 
 #include "../../detail/utils.hpp"
 #include "../optimizer.hpp"
@@ -81,22 +80,21 @@ class Adam : public Optimizer<DedupedPack> {
               constexpr int vec_size = eve::wide<T>::size();
               constexpr int unroll_factor = detail::UNROLL_FACTOR;
 
-              std::vector<std::thread> threads;
               int chunk_size = (param.numel() + options_.num_proc - 1) / options_.num_proc;
 
-              for (int t = 0; t < options_.num_proc; ++t) {
-                threads.emplace_back([&, t]() {
-                  int start = t * chunk_size;
+              detail::parallel(
+                [&](int i) {
+                  int start = i * chunk_size;
                   int end = std::min(start + chunk_size, param.numel());
 
-                  int i = start;
-                  for (; i + vec_size * unroll_factor <= end; i += vec_size * unroll_factor) {
+                  int j = start;
+                  for (; j + vec_size * unroll_factor <= end; j += vec_size * unroll_factor) {
                     detail::unroll<unroll_factor>([&]<int index>() {
                       constexpr int offset = index * vec_size;
 
-                      eve::wide<T> grad(&grad_full[i + offset]);
-                      eve::wide<T> mom(&mom_full[state_offset + i + offset]);
-                      eve::wide<T> vel(&vel_full[state_offset + i + offset]);
+                      eve::wide<T> grad(&grad_full[j + offset]);
+                      eve::wide<T> mom(&mom_full[state_offset + j + offset]);
+                      eve::wide<T> vel(&vel_full[state_offset + j + offset]);
 
                       if (options_.maximize) grad = -grad;
 
@@ -110,42 +108,39 @@ class Adam : public Optimizer<DedupedPack> {
                       vel = eve::fma(beta2, vel, grad_squared);
                       vel = eve::fnma(beta2, grad_squared, vel);
 
-                      eve::store(mom, &mom_full[state_offset + i + offset]);
-                      eve::store(vel, &vel_full[state_offset + i + offset]);
+                      eve::store(mom, &mom_full[state_offset + j + offset]);
+                      eve::store(vel, &vel_full[state_offset + j + offset]);
 
                       auto update =
                         eve::div(mom, eve::add(eve::sqrt(vel), eve::wide<T>(options_.epsilon)));
-                      eve::wide<T> data(&data_full[i + offset]);
+                      eve::wide<T> data(&data_full[j + offset]);
 
                       if (options_.lambda)
                         update = eve::fnma(eve::wide<T>(options_.lambda), data, update);
                       data = eve::fma(eve::wide<T>(options_.lr), update, data);
-                      eve::store(data, &data_full[i + offset]);
+                      eve::store(data, &data_full[j + offset]);
                     });
                   }
 
-                  for (; i < end; ++i) {
-                    T grad = options_.maximize ? -grad_full[i] : grad_full[i];
+                  for (; j < end; ++j) {
+                    T grad = options_.maximize ? -grad_full[j] : grad_full[j];
 
                     T mom =
-                      options_.beta1 * mom_full[state_offset + i] + (1 - options_.beta1) * grad;
-                    T vel = options_.beta2 * vel_full[state_offset + i] +
+                      options_.beta1 * mom_full[state_offset + j] + (1 - options_.beta1) * grad;
+                    T vel = options_.beta2 * vel_full[state_offset + j] +
                             (1 - options_.beta2) * grad * grad;
 
-                    mom_full[state_offset + i] = mom;
-                    vel_full[state_offset + i] = vel;
+                    mom_full[state_offset + j] = mom;
+                    vel_full[state_offset + j] = vel;
 
                     T update = mom / (std::sqrt(vel) + options_.epsilon);
-                    if (options_.lambda) update = -options_.lambda * data_full[i] + update;
+                    if (options_.lambda) update = -options_.lambda * data_full[j] + update;
 
-                    data_full[i] += options_.lr * update;
+                    data_full[j] += options_.lr * update;
                   }
-                });
-              }
-
-              for (auto& thread : threads) {
-                thread.join();
-              }
+                },
+                options_.num_proc
+              );
 
               state_offset += param.numel();
             }
