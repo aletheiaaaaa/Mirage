@@ -96,7 +96,7 @@ class Adam : public Optimizer<DedupedPack> {
                       eve::wide<T> mom(&mom_full[state_offset + j + offset]);
                       eve::wide<T> vel(&vel_full[state_offset + j + offset]);
 
-                      if (options_.maximize) grad = -grad;
+                      if (!options_.maximize) grad = -grad;
 
                       eve::wide<T> beta1(options_.beta1);
                       mom = eve::fma(beta1, mom, grad);
@@ -123,7 +123,7 @@ class Adam : public Optimizer<DedupedPack> {
                   }
 
                   for (; j < end; ++j) {
-                    T grad = options_.maximize ? -grad_full[j] : grad_full[j];
+                    T grad = options_.maximize ? grad_full[j] : -grad_full[j];
 
                     T mom =
                       options_.beta1 * mom_full[state_offset + j] + (1 - options_.beta1) * grad;

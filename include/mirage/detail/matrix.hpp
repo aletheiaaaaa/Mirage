@@ -5,9 +5,6 @@
 #include <eve/arch/cpu/wide.hpp>
 #include <eve/conditional.hpp>
 #include <eve/module/core.hpp>
-#include <eve/module/core/regular/if_else.hpp>
-#include <eve/module/core/regular/sqrt.hpp>
-#include <eve/module/core/regular/store.hpp>
 #include <vector>
 
 #include "utils.hpp"
@@ -158,7 +155,7 @@ inline void triple(
 }
 
 template <typename T, bool compute_ema, bool squared_fma>
-inline void matrix_fma(
+inline void matrix_accum_internal(
   std::span<const T> X,
   std::span<T> Y,
   int M,
@@ -234,7 +231,7 @@ void triple_tile(
 ) {
   matrix::triple<false, T>(
     A, B, C, out, M, K, N, P, x_chunk, y_chunk, x_off, y_off, [&](auto& reg) {
-      return ((maximize) ? -1 : 1) * eve::sign(reg);
+      return ((maximize) ? 1 : -1) * eve::sign(reg);
     }
   );
 }
@@ -254,19 +251,18 @@ void norm_triple_sign_tile(
   int x_off,
   int y_off
 ) {
-  matrix::triple<false, T>(
-    A, B, C, out, M, K, N, P, x_chunk, y_chunk, x_off, y_off, [&](auto& reg) {
-      eve::wide<T> m_reg(M);
-      eve::wide<T> n_reg(N);
-      eve::wide<T> twos(T(2));
+  matrix::triple<true, T>(A, B, C, out, M, K, N, P, x_chunk, y_chunk, x_off, y_off, [&](auto& reg) {
+    eve::wide<T> m_reg(M);
+    eve::wide<T> n_reg(N);
+    eve::wide<T> twos(T(2));
 
-      return reg * twos / (m_reg + n_reg);
-    }
-  );
+    return reg * twos / (m_reg + n_reg);
+  });
 }
 
-template <typename T>
-void symmetrized_ema_tile(
+namespace matrix {
+template <typename T, bool compute_ema>
+inline void symmetrized_internal(
   std::span<const T> X_og,
   std::span<const T> X_tp,
   std::span<T> E,
@@ -336,13 +332,220 @@ void symmetrized_ema_tile(
             eve::wide<T>(&E[(x_off + i + row) * M + y_off + j + col * vec_size]),
             eve::zero
           );
-          eve::wide<T> wt(ema_rate);
 
-          ema = eve::fma(wt, ema, acc[idx]);
-          ema = eve::fnma(wt, acc[idx], ema);
+          if (compute_ema) {
+            eve::wide<T> wt(ema_rate);
+
+            ema = eve::fma(wt, ema, acc[idx]);
+            ema = eve::fnma(wt, acc[idx], ema);
+          } else {
+            ema = acc[idx];
+          }
 
           eve::store[eve::keep_first(valid)](
             ema, &E[(x_off + i + row) * M + y_off + j + col * vec_size]
+          );
+        }
+      });
+    }
+  }
+}
+}  // namespace matrix
+
+template <typename T>
+void symmetrized_ema_tile(
+  std::span<const T> X_og,
+  std::span<const T> X_tp,
+  std::span<T> E,
+  int M,
+  int N,
+  int x_chunk,
+  int y_chunk,
+  int x_off,
+  int y_off,
+  float ema_rate
+) {
+  matrix::symmetrized_internal<T, true>(
+    X_og, X_tp, E, M, N, x_chunk, y_chunk, x_off, y_off, ema_rate
+  );
+}
+
+template <typename T>
+void symmetrized_tile(
+  std::span<const T> X_og,
+  std::span<const T> X_tp,
+  std::span<T> E,
+  int M,
+  int N,
+  int x_chunk,
+  int y_chunk,
+  int x_off,
+  int y_off
+) {
+  matrix::symmetrized_internal<T, false>(X_og, X_tp, E, M, N, x_chunk, y_chunk, x_off, y_off, 0);
+}
+
+template <typename T>
+void quadratic_tile(
+  std::span<const T> A,
+  std::span<T> out,
+  float b,
+  float c,
+  int N,
+  int x_chunk,
+  int y_chunk,
+  int x_off,
+  int y_off
+) {
+  constexpr int x_height = UNROLL_FACTOR;
+  constexpr int y_height = std::max(1, UNROLL_FACTOR / 2);
+  constexpr int vec_size = eve::wide<T>::size();
+  constexpr int arr_size = x_height * y_height;
+
+  x_chunk = std::min(x_chunk, N - x_off);
+  y_chunk = std::min(y_chunk, N - y_off);
+
+  for (int i = 0; i < x_chunk; i += x_height) {
+    int i_rem = std::min(x_height, x_chunk - i);
+
+    for (int j = 0; j < y_chunk; j += y_height * vec_size) {
+      int j_rem = std::min(y_height * vec_size, y_chunk - j);
+
+      std::array<eve::wide<T>, arr_size> acc;
+      std::ranges::fill(acc, eve::wide<T>(T(0)));
+
+      for (int k = 0; k < N; ++k) {
+        std::array<eve::wide<T>, x_height> tile0;
+        std::array<eve::wide<T>, y_height> tile1;
+
+        unroll<x_height>([&]<int idx>() {
+          tile0[idx] =
+            (idx < i_rem) ? eve::wide<T>(A[(x_off + i + idx) * N + k]) : eve::wide<T>(T(0));
+        });
+
+        unroll<y_height>([&]<int idx>() {
+          int valid = std::min(vec_size, j_rem - idx * vec_size);
+
+          tile1[idx] = (idx * vec_size < j_rem)
+                         ? eve::if_else(
+                             eve::keep_first(valid),
+                             eve::wide<T>(&A[k * N + y_off + j + idx * vec_size]),
+                             eve::zero
+                           )
+                         : eve::wide<T>(T(0));
+        });
+
+        unroll<arr_size>([&]<int idx>() {
+          constexpr int row = idx % x_height;
+          constexpr int col = idx / x_height;
+
+          acc[idx] = eve::fma(tile0[row], tile1[col], acc[idx]);
+        });
+      }
+
+      unroll<arr_size>([&]<int idx>() {
+        constexpr int row = idx % x_height;
+        constexpr int col = idx / x_height;
+
+        if (row < i_rem && col * vec_size < j_rem) {
+          auto valid = std::min(vec_size, j_rem - col * vec_size);
+
+          eve::wide<T> lin = eve::if_else(
+            eve::keep_first(valid),
+            eve::wide<T>(&A[(x_off + i + row) * N + y_off + j + col * vec_size]),
+            eve::zero
+          );
+          eve::wide<T> b_vec(b);
+          eve::wide<T> c_vec(c);
+
+          auto res = eve::add(eve::mul(b_vec, lin), eve::mul(c_vec, acc[idx]));
+
+          eve::store[eve::keep_first(valid)](
+            res, &out[(x_off + i + row) * N + y_off + j + col * vec_size]
+          );
+        }
+      });
+    }
+  }
+}
+
+template <typename T>
+void ns_final_tile(
+  std::span<const T> B,
+  std::span<const T> X,
+  std::span<T> out,
+  float a,
+  int M,
+  int N,
+  int x_chunk,
+  int y_chunk,
+  int x_off,
+  int y_off
+) {
+  constexpr int x_height = UNROLL_FACTOR;
+  constexpr int y_height = std::max(1, UNROLL_FACTOR / 2);
+  constexpr int vec_size = eve::wide<T>::size();
+  constexpr int arr_size = x_height * y_height;
+
+  x_chunk = std::min(x_chunk, N - x_off);
+  y_chunk = std::min(y_chunk, N - y_off);
+
+  for (int i = 0; i < x_chunk; i += x_height) {
+    int i_rem = std::min(x_height, x_chunk - i);
+
+    for (int j = 0; j < y_chunk; j += y_height * vec_size) {
+      int j_rem = std::min(y_height * vec_size, y_chunk - j);
+
+      std::array<eve::wide<T>, arr_size> acc;
+      std::ranges::fill(acc, eve::wide<T>(T(0)));
+
+      for (int k = 0; k < N; ++k) {
+        std::array<eve::wide<T>, x_height> tile0;
+        std::array<eve::wide<T>, y_height> tile1;
+
+        unroll<x_height>([&]<int idx>() {
+          tile0[idx] =
+            (idx < i_rem) ? eve::wide<T>(B[(x_off + i + idx) * N + k]) : eve::wide<T>(T(0));
+        });
+
+        unroll<y_height>([&]<int idx>() {
+          int valid = std::min(vec_size, j_rem - idx * vec_size);
+
+          tile1[idx] = (idx * vec_size < j_rem)
+                         ? eve::if_else(
+                             eve::keep_first(valid),
+                             eve::wide<T>(&X[k * N + y_off + j + idx * vec_size]),
+                             eve::zero
+                           )
+                         : eve::wide<T>(T(0));
+        });
+
+        unroll<arr_size>([&]<int idx>() {
+          constexpr int row = idx % x_height;
+          constexpr int col = idx / x_height;
+
+          acc[idx] = eve::fma(tile0[row], tile1[col], acc[idx]);
+        });
+      }
+
+      unroll<arr_size>([&]<int idx>() {
+        constexpr int row = idx % x_height;
+        constexpr int col = idx / x_height;
+
+        if (row < i_rem && col * vec_size < j_rem) {
+          auto valid = std::min(vec_size, j_rem - col * vec_size);
+
+          eve::wide<T> x_vec = eve::if_else(
+            eve::keep_first(valid),
+            eve::wide<T>(&X[(x_off + i + row) * N + y_off + j + col * vec_size]),
+            eve::zero
+          );
+          eve::wide<T> a_vec(a);
+
+          auto res = eve::add(eve::mul(a_vec, x_vec), acc[idx]);
+
+          eve::store[eve::keep_first(valid)](
+            res, &out[(x_off + i + row) * N + y_off + j + col * vec_size]
           );
         }
       });
@@ -362,7 +565,9 @@ void fma_tile(
   int y_off,
   float fma_mul
 ) {
-  matrix::matrix_fma<T, false, false>(X, Y, M, N, x_chunk, y_chunk, x_off, y_off, fma_mul);
+  matrix::matrix_accum_internal<T, false, false>(
+    X, Y, M, N, x_chunk, y_chunk, x_off, y_off, fma_mul
+  );
 }
 
 template <typename T>
@@ -377,7 +582,9 @@ void ema_tile(
   int y_off,
   float ema_rate
 ) {
-  matrix::matrix_fma<T, true, false>(X, E, M, N, x_chunk, y_chunk, x_off, y_off, ema_rate);
+  matrix::matrix_accum_internal<T, true, false>(
+    X, E, M, N, x_chunk, y_chunk, x_off, y_off, ema_rate
+  );
 }
 
 template <typename T>
@@ -392,7 +599,9 @@ void squared_ema_tile(
   int y_off,
   float ema_rate
 ) {
-  matrix::matrix_fma<T, true, true>(X, E, M, N, x_chunk, y_chunk, x_off, y_off, ema_rate);
+  matrix::matrix_accum_internal<T, true, true>(
+    X, E, M, N, x_chunk, y_chunk, x_off, y_off, ema_rate
+  );
 }
 
 template <typename T>

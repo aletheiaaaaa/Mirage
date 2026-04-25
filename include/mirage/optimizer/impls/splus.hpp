@@ -2,6 +2,7 @@
 
 #include <Eigen/Core>
 #include <Eigen/Eigenvalues>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -109,7 +110,11 @@ class SPlus : public Optimizer<DedupedPack> {
               auto param_tp = param_og.copy();
               param_tp.view(std::array{width, height});
               param_tp.transpose(0, 1);
-              param_tp.view(param_og.size());
+              param_tp.view(
+                std::rotate(
+                  param_og.size().begin(), param_og.size().begin() + 1, param_og.size().end()
+                )
+              );
 
               int numel_off = param_og.numel();
               int left_off = width * width;

@@ -90,7 +90,7 @@ class SGD : public Optimizer<DedupedPack> {
                       eve::wide<T> mom(&mom_full[state_offset + j + offset]);
                       eve::wide<T> data(&data_full[j + offset]);
 
-                      if (options_.maximize) grad = -grad;
+                      if (!options_.maximize) grad = -grad;
 
                       auto update = [&]() {
                         if (options_.momentum) {
@@ -113,7 +113,7 @@ class SGD : public Optimizer<DedupedPack> {
                   }
 
                   for (; j < end; ++j) {
-                    T grad = options_.maximize ? -grad_full[j] : grad_full[j];
+                    T grad = options_.maximize ? grad_full[j] : -grad_full[j];
                     T mom = options_.momentum * mom_full[state_offset + j] + grad;
                     mom_full[state_offset + j] = mom;
 

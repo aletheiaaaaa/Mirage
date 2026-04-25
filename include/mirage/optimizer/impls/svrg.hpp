@@ -113,7 +113,7 @@ class SVRG : public Optimizer<DedupedPack> {
 
                       eve::wide<T> grad(&grad_full[j + off]);
                       eve::wide<T> data(&data_full[j + off]);
-                      if (options_.maximize) grad = -grad;
+                      if (!options_.maximize) grad = -grad;
 
                       auto update = [&]() {
                         if (
@@ -138,7 +138,7 @@ class SVRG : public Optimizer<DedupedPack> {
                   }
 
                   for (; j < end; ++j) {
-                    T grad = options_.maximize ? -grad_full[j] : grad_full[j];
+                    T grad = options_.maximize ? grad_full[j] : -grad_full[j];
                     T update =
                       ((options_.recompute_every != -1) &&
                        state_.step % options_.recompute_every == 0)

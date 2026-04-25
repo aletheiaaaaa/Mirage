@@ -17,8 +17,9 @@ namespace mirage::optim {
 struct MuonOptions {
   float lr = 0.01f;
   float momentum = 0.9f;
-  float lambda = 0.0f;
+  float epsilon = 1e-7;
   int newton_schulz_iters = 5;
+  float lambda = 0.0f;
 
   int num_proc = 1;
 
@@ -26,7 +27,7 @@ struct MuonOptions {
 
   template <class Archive>
   void serialize(Archive& ar) {
-    ar(lr, momentum, lambda, newton_schulz_iters, maximize);
+    ar(lr, momentum, epsilon, newton_schulz_iters, lambda, maximize);
   }
 };
 
@@ -71,15 +72,26 @@ class Muon : public Optimizer<DedupedPack> {
 
             int state_offset = 0;
             for (auto& param_ref : param_vec) {
-              auto param = param_ref.get();
-              using T = ParamType::DataType;
+              auto& param_og = param_ref.get();
+              using T = typename ParamType::DataType;
+              int width = param_og.size(0);
+              int height = param_og.strides(0);
 
-              auto& grad_full = param.grad();
-              auto& data_full = param.data();
+              auto param_tp = param_og.copy();
+              param_tp.view(std::array{width, height});
+              param_tp.transpose(0, 1);
+              param_tp.view(
+                std::rotate(
+                  param_og.size().begin(), param_og.size().begin() + 1, param_og.size().end()
+                )
+              );
+
+              auto& grad_full = param_og.grad();
+              auto& data_full = param_og.data();
 
               constexpr int vec_size = eve::wide<T>::size();
 
-              int chunk_size = (param.numel() + options_.num_proc - 1) / options_.num_proc;
+              int chunk_size = (param_og.numel() + options_.num_proc - 1) / options_.num_proc;
 
               detail::parallel(
                 [&](int i) {
