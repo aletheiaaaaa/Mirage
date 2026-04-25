@@ -1,7 +1,5 @@
 #pragma once
 
-#include <Eigen/Core>
-#include <Eigen/Eigenvalues>
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -9,10 +7,9 @@
 #include <stdexcept>
 #include <tuple>
 #include <utility>
-#include <vector>
 
 #include "../../detail/matrix.hpp"
-#include "../../detail/utils.hpp"
+#include "../../detail/thread.hpp"
 #include "../optimizer.hpp"
 
 namespace mirage::optim {
@@ -36,15 +33,23 @@ struct MuonOptions {
 template <typename TypeTuple>
 struct MuonState : public OptimizerState {
   detail::ExtractedVector<TypeTuple> momentum{};
+  detail::ExtractedVector<TypeTuple> og_buf{};
+  detail::ExtractedVector<TypeTuple> tp_buf{};
+  detail::ExtractedVector<TypeTuple> step1_buf{};
+  detail::ExtractedVector<TypeTuple> step2_buf{};
+  detail::ExtractedVector<TypeTuple> step3_buf{};
 };
 
 template <typename DedupedPack>
 class Muon : public Optimizer<DedupedPack> {
   public:
   explicit Muon(ParameterPack<DedupedPack> parameters, MuonOptions options = {})
-    : Optimizer<DedupedPack>(parameters), options_(options) {
+    : Optimizer<DedupedPack>(parameters), options_(options), pool_(options.num_proc) {
     detail::test_multidim(this->parameters_.data);
-    detail::test_oom(this->parameters_.data, [&](auto& param) { return param.numel(); });
+    detail::test_oom(this->parameters_.data, [&](auto& param) {
+      auto s = std::min(param.size(0), param.strides(0));
+      return 4 * param.numel() + 2 * s * s;
+    });
 
     std::apply(
       [&](auto&... param_vecs) {
@@ -52,10 +57,21 @@ class Muon : public Optimizer<DedupedPack> {
           [&](auto& param_vec) {
             using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
             auto& mom = std::get<detail::ExtractType_t<ParamType>>(state_.momentum);
+            auto& og_buf = std::get<detail::ExtractType_t<ParamType>>(state_.og_buf);
+            auto& tp_buf = std::get<detail::ExtractType_t<ParamType>>(state_.tp_buf);
+            auto& step1_buf = std::get<detail::ExtractType_t<ParamType>>(state_.step1_buf);
+            auto& step2_buf = std::get<detail::ExtractType_t<ParamType>>(state_.step2_buf);
+            auto& step3_buf = std::get<detail::ExtractType_t<ParamType>>(state_.step3_buf);
             for (auto& param_ref : param_vec) {
               auto& param = param_ref.get();
               using T = typename ParamType::DataType;
+              int s = std::min(param.size(0), param.strides(0));
               mom.insert(mom.end(), param.numel(), T(0));
+              og_buf.insert(og_buf.end(), param.numel(), T(0));
+              tp_buf.insert(tp_buf.end(), param.numel(), T(0));
+              step1_buf.insert(step1_buf.end(), s * s, T(0));
+              step2_buf.insert(step2_buf.end(), s * s, T(0));
+              step3_buf.insert(step3_buf.end(), param.numel(), T(0));
             }
           }(param_vecs),
           ...);
@@ -71,15 +87,29 @@ class Muon : public Optimizer<DedupedPack> {
           [&](auto& param_vec) {
             using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
             auto& mom_full = std::get<detail::ExtractType_t<ParamType>>(state_.momentum);
+            auto& og_full = std::get<detail::ExtractType_t<ParamType>>(state_.og_buf);
+            auto& tp_full = std::get<detail::ExtractType_t<ParamType>>(state_.tp_buf);
+            auto& step1_full = std::get<detail::ExtractType_t<ParamType>>(state_.step1_buf);
+            auto& step2_full = std::get<detail::ExtractType_t<ParamType>>(state_.step2_buf);
+            auto& step3_full = std::get<detail::ExtractType_t<ParamType>>(state_.step3_buf);
 
             int state_offset = 0;
+            int sq_offset = 0;
             for (auto& param_ref : param_vec) {
               auto& param = param_ref.get();
               using T = typename ParamType::DataType;
               int width = param.size(0);
               int height = param.strides(0);
+              int numel = param.numel();
+              int smaller = std::min(width, height);
+              int larger = std::max(width, height);
 
-              auto og_mom_slice = std::span(mom_full).subspan(state_offset, param.numel());
+              auto og_mom_slice = std::span(mom_full).subspan(state_offset, numel);
+              auto og_buf_slice = std::span(og_full).subspan(state_offset, numel);
+              auto tp_buf_slice = std::span(tp_full).subspan(state_offset, numel);
+              auto step1_slice = std::span(step1_full).subspan(sq_offset, smaller * smaller);
+              auto step2_slice = std::span(step2_full).subspan(sq_offset, smaller * smaller);
+              auto step3_slice = std::span(step3_full).subspan(state_offset, numel);
 
               auto& grad_full = param.grad();
               auto& data_full = param.data();
@@ -105,14 +135,11 @@ class Muon : public Optimizer<DedupedPack> {
                 return std::make_pair((id / 2) * chunk_width, (id % 2) * chunk_height);
               };
 
-              int smaller = std::min(width, height);
-              int larger = std::max(width, height);
-
               const auto [sq_width, sq_height] = chunks(smaller, smaller);
               const auto [rc_width, rc_height] = chunks(smaller, larger);
               const auto [og_width, og_height] = chunks(width, height);
 
-              detail::parallel(
+              pool_.run(
                 [&](int i) {
                   const auto [x_off, y_off] = offsets(i, og_width, og_height);
                   detail::fma_tile(
@@ -130,31 +157,51 @@ class Muon : public Optimizer<DedupedPack> {
                 options_.num_proc
               );
 
-              // TODO: add frobenius normalization;
+              float norm = std::sqrt(
+                std::transform_reduce(
+                  og_mom_slice.begin(), og_mom_slice.end(), 0.0f, std::plus{}, [](float x) {
+                    return x * x;
+                  }
+                )
+              );
 
-              auto tp_mom_slice =
-                detail::transpose(std::span<const T>(og_mom_slice), height, width);
-
-              std::vector<T> og_mom, tp_mom;
+              pool_.run(
+                [&](int i) {
+                  const auto [x_off, y_off] = offsets(i, og_width, og_height);
+                  detail::normalize(
+                    og_mom_slice,
+                    norm + options_.epsilon,
+                    width,
+                    height,
+                    std::min(og_width, width - x_off),
+                    std::min(og_height, height - y_off),
+                    x_off,
+                    y_off
+                  );
+                },
+                options_.num_proc
+              );
 
               if (width > height) {
-                og_mom = std::move(tp_mom_slice);
-                tp_mom = std::vector<T>(og_mom_slice.begin(), og_mom_slice.end());
+                for (int i = 0; i < numel; ++i)
+                  og_buf_slice[i] = og_mom_slice[height * (i / width) + i % width];
+                std::copy(og_mom_slice.begin(), og_mom_slice.end(), tp_buf_slice.begin());
               } else {
-                og_mom = std::vector<T>(og_mom_slice.begin(), og_mom_slice.end());
-                tp_mom = std::move(tp_mom_slice);
+                std::copy(og_mom_slice.begin(), og_mom_slice.end(), og_buf_slice.begin());
+                for (int i = 0; i < numel; ++i)
+                  tp_buf_slice[i] = og_mom_slice[height * (i / width) + i % width];
               }
 
               for (int iter = 0; iter < options_.newton_schulz_iters; ++iter) {
-                std::vector<T> step1(smaller * smaller, T(0));
-                detail::parallel(
+                std::fill(step1_slice.begin(), step1_slice.end(), T(0));
+                pool_.run(
                   [&](int i) {
                     const auto [sq_x_off, sq_y_off] = offsets(i, sq_width, sq_height);
 
                     detail::symmetrized_tile(
-                      std::span<const T>(og_mom),
-                      std::span<const T>(tp_mom),
-                      std::span<T>(step1),
+                      std::span<const T>(og_buf_slice),
+                      std::span<const T>(tp_buf_slice),
+                      step1_slice,
                       smaller,
                       larger,
                       std::min(sq_width, smaller - sq_x_off),
@@ -166,14 +213,14 @@ class Muon : public Optimizer<DedupedPack> {
                   options_.num_proc
                 );
 
-                std::vector<T> step2(smaller * smaller, T(0));
-                detail::parallel(
+                std::fill(step2_slice.begin(), step2_slice.end(), T(0));
+                pool_.run(
                   [&](int i) {
                     const auto [sq_x_off, sq_y_off] = offsets(i, sq_width, sq_height);
 
                     detail::quadratic_tile(
-                      std::span<const T>(step1),
-                      std::span<T>(step2),
+                      std::span<const T>(step1_slice),
+                      step2_slice,
                       -4.7750f,
                       2.0315f,
                       smaller,
@@ -186,15 +233,15 @@ class Muon : public Optimizer<DedupedPack> {
                   options_.num_proc
                 );
 
-                std::vector<T> step3(smaller * larger, T(0));
-                detail::parallel(
+                std::fill(step3_slice.begin(), step3_slice.end(), T(0));
+                pool_.run(
                   [&](int i) {
                     const auto [rc_x_off, rc_y_off] = offsets(i, rc_width, rc_height);
 
                     detail::ns_final_tile(
-                      std::span<const T>(step2),
-                      std::span<const T>(og_mom),
-                      std::span<T>(step3),
+                      std::span<const T>(step2_slice),
+                      std::span<const T>(og_buf_slice),
+                      step3_slice,
                       3.4445f,
                       smaller,
                       larger,
@@ -207,27 +254,27 @@ class Muon : public Optimizer<DedupedPack> {
                   options_.num_proc
                 );
 
-                og_mom = step3;
-                tp_mom = detail::transpose(std::span<const T>(step3), larger, smaller);
+                std::copy(step3_slice.begin(), step3_slice.end(), og_buf_slice.begin());
+                for (int i = 0; i < numel; ++i)
+                  tp_buf_slice[i] = step3_slice[larger * (i / smaller) + i % smaller];
               }
 
-              auto span = std::span<const T>(og_mom);
               if (width > height) {
-                auto transposed = detail::transpose(span, smaller, larger);
-                std::copy(transposed.begin(), transposed.end(), og_mom_slice.begin());
+                for (int i = 0; i < numel; ++i)
+                  og_mom_slice[i] = og_buf_slice[height * (i / width) + i % width];
               } else {
-                std::copy(span.begin(), span.end(), og_mom_slice.begin());
+                std::copy(og_buf_slice.begin(), og_buf_slice.end(), og_mom_slice.begin());
               }
 
-              auto& update = (width > height) ? og_mom : tp_mom;
+              auto update_slice = (width > height) ? og_buf_slice : tp_buf_slice;
 
-              detail::parallel(
+              pool_.run(
                 [&](int i) {
                   const auto [x_off, y_off] = offsets(i, og_width, og_height);
                   if (options_.lambda) {
                     detail::fma_tile(
                       std::span<const T>(data_full),
-                      std::span(update),
+                      update_slice,
                       width,
                       height,
                       og_width,
@@ -239,7 +286,7 @@ class Muon : public Optimizer<DedupedPack> {
                   }
 
                   detail::fma_tile(
-                    std::span<const T>(update),
+                    std::span<const T>(update_slice),
                     std::span(data_full),
                     width,
                     height,
@@ -253,7 +300,8 @@ class Muon : public Optimizer<DedupedPack> {
                 options_.num_proc
               );
 
-              state_offset += param.numel();
+              state_offset += numel;
+              sq_offset += smaller * smaller;
             }
           }(param_vecs),
           ...);
@@ -322,6 +370,7 @@ class Muon : public Optimizer<DedupedPack> {
   private:
   MuonOptions options_;
   MuonState<DedupedPack> state_;
+  detail::ThreadPool pool_;
 
   std::string optimizer_type() const override {
     return "Muon<" + detail::type_names(this->parameters_.data) + ">";

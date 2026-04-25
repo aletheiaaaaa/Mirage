@@ -4,6 +4,7 @@
 #include <fstream>
 #include <stdexcept>
 
+#include "../../detail/thread.hpp"
 #include "../../detail/utils.hpp"
 #include "../optimizer.hpp"
 
@@ -34,7 +35,7 @@ template <typename DedupedPack>
 class Sarah : public Optimizer<DedupedPack> {
   public:
   explicit Sarah(ParameterPack<DedupedPack> parameters, SarahOptions options = {})
-    : Optimizer<DedupedPack>(parameters), options_(options) {
+    : Optimizer<DedupedPack>(parameters), options_(options), pool_(options.num_proc) {
     if ((options_.recompute_every != -1) && options_.recompute_every == 0)
       throw std::invalid_argument(
         "Recompute every must be greater than 0 when recompute is enabled"
@@ -88,7 +89,7 @@ class Sarah : public Optimizer<DedupedPack> {
 
               int chunk_size = (param.numel() + options_.num_proc - 1) / options_.num_proc;
 
-              detail::parallel(
+              pool_.run(
                 [&](int i) {
                   int start = i * chunk_size;
                   int end = std::min(start + chunk_size, param.numel());
@@ -214,6 +215,7 @@ class Sarah : public Optimizer<DedupedPack> {
   private:
   SarahOptions options_;
   SarahState<DedupedPack> state_;
+  detail::ThreadPool pool_;
 
   std::string optimizer_type() const override {
     return "Sarah<" + detail::type_names(this->parameters_.data) + ">";

@@ -5,9 +5,7 @@
 #include <eve/module/core.hpp>
 #include <eve/wide.hpp>
 #include <string>
-#include <thread>
 #include <utility>
-#include <vector>
 
 #include "arch.hpp"
 
@@ -48,18 +46,6 @@ constexpr inline void unroll(F&& func) {
   [&]<size_t... Is>(std::index_sequence<Is...>) {
     (func.template operator()<Is>(), ...);
   }(std::make_index_sequence<N>{});
-}
-
-template <typename F>
-inline void parallel(F&& func, size_t num_proc) {
-  std::vector<std::thread> threads;
-  threads.reserve(num_proc);
-  for (size_t i = 0; i < num_proc; ++i) {
-    threads.emplace_back(func, i);
-  }
-  for (auto& thread : threads) {
-    thread.join();
-  }
 }
 
 template <typename T>

@@ -199,7 +199,7 @@ inline void matrix_accum_internal(
           );
           eve::wide<T> mul(fma_mul);
 
-          if (squared_fma) data = data * data;
+          if (squared_fma) data = eve::mul(data, data);
           res = eve::fma(mul, res, data);
           if (compute_ema) res = eve::fnma(mul, data, res);
 
@@ -602,6 +602,57 @@ void squared_ema_tile(
   matrix::matrix_accum_internal<T, true, true>(
     X, E, M, N, x_chunk, y_chunk, x_off, y_off, ema_rate
   );
+}
+
+template <typename T>
+void normalize(
+  std::span<T> X,
+  float norm,
+  int M,
+  int N,
+  int x_chunk,
+  int y_chunk,
+  int x_off,
+  int y_off
+) {
+  constexpr int x_height = UNROLL_FACTOR;
+  constexpr int y_height = std::max(1, UNROLL_FACTOR / 2);
+  constexpr int vec_size = eve::wide<T>::size();
+  constexpr int arr_size = x_height * y_height;
+
+  float inv_norm = 1 / norm;
+
+  x_chunk = std::min(x_chunk, M - x_off);
+  y_chunk = std::min(y_chunk, N - y_off);
+
+  for (int i = 0; i < x_chunk; i += x_height) {
+    int i_rem = std::min(x_height, x_chunk - i);
+
+    for (int j = 0; j < y_chunk; j += y_height * vec_size) {
+      int j_rem = std::min(y_height * vec_size, y_chunk - j);
+
+      unroll<arr_size>([&]<int idx>() {
+        constexpr int row = idx % x_height;
+        constexpr int col = idx / x_height;
+
+        if (row < i_rem && col * vec_size < j_rem) {
+          auto valid = std::min(vec_size, j_rem - col * vec_size);
+
+          eve::wide<T> data = eve::if_else(
+            eve::keep_first(valid),
+            eve::wide<T>(&X[(x_off + i + row) * N + y_off + j + col * vec_size]),
+            eve::zero
+          );
+          eve::wide<T> norm_vec(inv_norm);
+
+          data = eve::mul(data, norm_vec);
+          eve::store[eve::keep_first(valid)](
+            data, &X[(x_off + i + row) * N + y_off + j + col * vec_size]
+          );
+        }
+      });
+    }
+  }
 }
 
 template <typename T>

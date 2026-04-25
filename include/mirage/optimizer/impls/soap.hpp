@@ -6,10 +6,9 @@
 #include <fstream>
 #include <stdexcept>
 #include <utility>
-#include <vector>
 
+#include "../../detail/thread.hpp"
 #include "../../detail/matrix.hpp"
-#include "../../detail/utils.hpp"
 #include "../optimizer.hpp"
 
 namespace mirage::optim {
@@ -39,17 +38,26 @@ struct SoapState : public OptimizerState {
   detail::ExtractedVector<TypeTuple> right_velocity{};
   detail::ExtractedVector<TypeTuple> left_eigenvectors{};
   detail::ExtractedVector<TypeTuple> right_eigenvectors{};
+
+  detail::ExtractedVector<TypeTuple> rotated{};
+  detail::ExtractedVector<TypeTuple> update{};
+  detail::ExtractedVector<TypeTuple> left_eigenvectors_T{};
+  detail::ExtractedVector<TypeTuple> right_eigenvectors_T{};
+  detail::ExtractedVector<TypeTuple> tp_grad{};
 };
 
 template <typename DedupedPack>
 class Soap : public Optimizer<DedupedPack> {
   public:
   explicit Soap(ParameterPack<DedupedPack> parameters, SoapOptions options = {})
-    : Optimizer<DedupedPack>(parameters), options_(options) {
+    : Optimizer<DedupedPack>(parameters),
+      options_(options),
+      pool_(options.num_proc)
+  {
     detail::test_multidim(this->parameters_.data);
     detail::test_oom(this->parameters_.data, [&](auto& param) {
-      return 2 *
-             (param.numel() + param.size(0) * param.size(0) + param.strides(0) * param.strides(0));
+      return 5 * param.numel() + 3 * param.size(0) * param.size(0) +
+             3 * param.strides(0) * param.strides(0);
     });
 
     std::apply(
@@ -57,25 +65,39 @@ class Soap : public Optimizer<DedupedPack> {
         (
           [&](auto& param_vec) {
             using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
+            using T = typename ParamType::DataType;
+
             auto& mom = std::get<detail::ExtractType_t<ParamType>>(state_.momentum);
             auto& vel = std::get<detail::ExtractType_t<ParamType>>(state_.velocity);
             auto& lvel = std::get<detail::ExtractType_t<ParamType>>(state_.left_velocity);
             auto& rvel = std::get<detail::ExtractType_t<ParamType>>(state_.right_velocity);
             auto& leig = std::get<detail::ExtractType_t<ParamType>>(state_.left_eigenvectors);
             auto& reig = std::get<detail::ExtractType_t<ParamType>>(state_.right_eigenvectors);
+            auto& rot = std::get<detail::ExtractType_t<ParamType>>(state_.rotated);
+            auto& upd = std::get<detail::ExtractType_t<ParamType>>(state_.update);
+            auto& leig_T = std::get<detail::ExtractType_t<ParamType>>(state_.left_eigenvectors_T);
+            auto& reig_T = std::get<detail::ExtractType_t<ParamType>>(state_.right_eigenvectors_T);
+            auto& tpg = std::get<detail::ExtractType_t<ParamType>>(state_.tp_grad);
+
             for (auto& param_ref : param_vec) {
               auto& param = param_ref.get();
+              int numel = param.numel();
               int l_numel = param.size(0) * param.size(0);
               int r_numel = param.strides(0) * param.strides(0);
 
-              using T = typename ParamType::DataType;
-              mom.insert(mom.end(), param.numel(), T(0));
-              vel.insert(vel.end(), param.numel(), T(0));
+              mom.insert(mom.end(), numel, T(0));
+              vel.insert(vel.end(), numel, T(0));
 
               lvel.insert(lvel.end(), l_numel, T(0));
               rvel.insert(rvel.end(), r_numel, T(0));
               leig.insert(leig.end(), l_numel, T(0));
               reig.insert(reig.end(), r_numel, T(0));
+
+              rot.insert(rot.end(), numel, T(0));
+              upd.insert(upd.end(), numel, T(0));
+              leig_T.insert(leig_T.end(), l_numel, T(0));
+              reig_T.insert(reig_T.end(), r_numel, T(0));
+              tpg.insert(tpg.end(), numel, T(0));
             }
           }(param_vecs),
           ...);
@@ -90,30 +112,30 @@ class Soap : public Optimizer<DedupedPack> {
         (
           [&](auto& param_vec) {
             using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
+            using T = typename ParamType::DataType;
+
             auto& mom_full = std::get<detail::ExtractType_t<ParamType>>(state_.momentum);
             auto& vel_full = std::get<detail::ExtractType_t<ParamType>>(state_.velocity);
             auto& lvel_full = std::get<detail::ExtractType_t<ParamType>>(state_.left_velocity);
             auto& rvel_full = std::get<detail::ExtractType_t<ParamType>>(state_.right_velocity);
             auto& leig_full = std::get<detail::ExtractType_t<ParamType>>(state_.left_eigenvectors);
             auto& reig_full = std::get<detail::ExtractType_t<ParamType>>(state_.right_eigenvectors);
+            auto& rot_full = std::get<detail::ExtractType_t<ParamType>>(state_.rotated);
+            auto& upd_full = std::get<detail::ExtractType_t<ParamType>>(state_.update);
+            auto& leig_T_full =
+              std::get<detail::ExtractType_t<ParamType>>(state_.left_eigenvectors_T);
+            auto& reig_T_full =
+              std::get<detail::ExtractType_t<ParamType>>(state_.right_eigenvectors_T);
+            auto& tpg_full = std::get<detail::ExtractType_t<ParamType>>(state_.tp_grad);
 
             int state_offset = 0;
             int left_offset = 0;
             int right_offset = 0;
+
             for (auto param_ref : param_vec) {
               auto& param_og = param_ref.get();
-              using T = typename ParamType::DataType;
               int width = param_og.size(0);
               int height = param_og.strides(0);
-
-              auto param_tp = param_og.copy();
-              param_tp.view(std::array{width, height});
-              param_tp.transpose(0, 1);
-              param_tp.view(
-                std::rotate(
-                  param_og.size().begin(), param_og.size().begin() + 1, param_og.size().end()
-                )
-              );
 
               int numel_off = param_og.numel();
               int left_off = width * width;
@@ -121,43 +143,63 @@ class Soap : public Optimizer<DedupedPack> {
 
               auto mom_slice = std::span(mom_full).subspan(state_offset, numel_off);
               auto vel_slice = std::span(vel_full).subspan(state_offset, numel_off);
-              auto rvel_slice = std::span(rvel_full).subspan(right_offset, right_off);
               auto lvel_slice = std::span(lvel_full).subspan(left_offset, left_off);
-              auto reig_slice = std::span(reig_full).subspan(right_offset, right_off);
+              auto rvel_slice = std::span(rvel_full).subspan(right_offset, right_off);
               auto leig_slice = std::span(leig_full).subspan(left_offset, left_off);
+              auto reig_slice = std::span(reig_full).subspan(right_offset, right_off);
+              auto rot_slice = std::span(rot_full).subspan(state_offset, numel_off);
+              auto upd_slice = std::span(upd_full).subspan(state_offset, numel_off);
+              auto leig_T_slice = std::span(leig_T_full).subspan(left_offset, left_off);
+              auto reig_T_slice = std::span(reig_T_full).subspan(right_offset, right_off);
+              auto tpg_slice = std::span(tpg_full).subspan(state_offset, numel_off);
 
               auto& og_grad_full = param_og.grad();
-              auto& tp_grad_full = param_tp.grad();
               auto& data_full = param_og.data();
 
-              constexpr int vec_size = eve::wide<T>::size();
+              std::fill(rot_slice.begin(), rot_slice.end(), T(0));
+              std::fill(upd_slice.begin(), upd_slice.end(), T(0));
 
-              auto chunks = [&](int chunk_width, int chunk_height) {
-                if (options_.num_proc % 2) {
-                  return std::make_pair(
-                    (chunk_width + options_.num_proc - 1) / options_.num_proc, chunk_height
-                  );
-                }
+              for (int r = 0; r < width; ++r)
+                for (int c = 0; c < height; ++c)
+                  tpg_slice[c * width + r] = og_grad_full[r * height + c];
+
+              using Matrix = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+              if (state_.step % options_.decompose_every == 0) {
+                Eigen::Map<Matrix> lvel_mat(lvel_slice.data(), width, width);
+                Eigen::Map<Matrix> rvel_mat(rvel_slice.data(), height, height);
+
+                Eigen::SelfAdjointEigenSolver<Matrix> lvel_solver(lvel_mat);
+                Eigen::SelfAdjointEigenSolver<Matrix> rvel_solver(rvel_mat);
+
+                Eigen::Map<Matrix>(leig_slice.data(), width, width) = lvel_solver.eigenvectors();
+                Eigen::Map<Matrix>(reig_slice.data(), height, height) = rvel_solver.eigenvectors();
+              }
+
+              for (int r = 0; r < width; ++r)
+                for (int c = 0; c < width; ++c)
+                  leig_T_slice[c * width + r] = leig_slice[r * width + c];
+
+              for (int r = 0; r < height; ++r)
+                for (int c = 0; c < height; ++c)
+                  reig_T_slice[c * height + r] = reig_slice[r * height + c];
+
+              const auto chunks = [&](int cw, int ch) {
+                if (options_.num_proc % 2)
+                  return std::make_pair((cw + options_.num_proc - 1) / options_.num_proc, ch);
                 return std::make_pair(
-                  (2 * chunk_width + options_.num_proc - 1) / options_.num_proc,
-                  (chunk_height + 1) / 2
+                  (2 * cw + options_.num_proc - 1) / options_.num_proc, (ch + 1) / 2
                 );
               };
-
-              const auto offsets = [&](int id, int chunk_width, int chunk_height) {
-                if (options_.num_proc % 2) {
-                  return std::make_pair(id * chunk_width, 0);
-                }
-                return std::make_pair((id / 2) * chunk_width, (id % 2) * chunk_height);
+              const auto offsets = [&](int id, int cw, int ch) {
+                if (options_.num_proc % 2) return std::make_pair(id * cw, 0);
+                return std::make_pair((id / 2) * cw, (id % 2) * ch);
               };
 
               const auto [wh_width, wh_height] = chunks(width, height);
               const auto [ww_width, ww_height] = chunks(width, width);
               const auto [hh_width, hh_height] = chunks(height, height);
 
-              std::vector<T> rotated(width * height, T(0));
-              std::vector<T> update(width * height, T(0));
-              detail::parallel(
+              pool_.run(
                 [&](int i) {
                   const auto [wh_x_off, wh_y_off] = offsets(i, wh_width, wh_height);
                   const auto [ww_x_off, ww_y_off] = offsets(i, ww_width, ww_height);
@@ -165,7 +207,7 @@ class Soap : public Optimizer<DedupedPack> {
 
                   detail::symmetrized_ema_tile(
                     std::span<const T>(og_grad_full),
-                    std::span<const T>(tp_grad_full),
+                    std::span<const T>(tpg_slice),
                     lvel_slice,
                     width,
                     height,
@@ -177,7 +219,7 @@ class Soap : public Optimizer<DedupedPack> {
                   );
 
                   detail::symmetrized_ema_tile(
-                    std::span<const T>(tp_grad_full),
+                    std::span<const T>(tpg_slice),
                     std::span<const T>(og_grad_full),
                     rvel_slice,
                     height,
@@ -190,12 +232,10 @@ class Soap : public Optimizer<DedupedPack> {
                   );
 
                   detail::triple_tile(
-                    std::span<const T>(
-                      detail::transpose(std::span<const T>(leig_slice), width, width)
-                    ),
+                    std::span<const T>(leig_T_slice),
                     std::span<const T>(og_grad_full),
                     std::span<const T>(reig_slice),
-                    std::span(rotated),
+                    rot_slice,
                     width,
                     width,
                     height,
@@ -208,7 +248,7 @@ class Soap : public Optimizer<DedupedPack> {
                   );
 
                   detail::ema_tile(
-                    std::span<const T>(rotated),
+                    std::span<const T>(rot_slice),
                     mom_slice,
                     width,
                     height,
@@ -220,7 +260,7 @@ class Soap : public Optimizer<DedupedPack> {
                   );
 
                   detail::squared_ema_tile(
-                    std::span<const T>(rotated),
+                    std::span<const T>(rot_slice),
                     vel_slice,
                     width,
                     height,
@@ -234,7 +274,7 @@ class Soap : public Optimizer<DedupedPack> {
                   detail::adam_tile(
                     std::span<const T>(mom_slice),
                     std::span<const T>(vel_slice),
-                    std::span(update),
+                    upd_slice,
                     width,
                     height,
                     std::min(wh_width, width - wh_x_off),
@@ -247,33 +287,15 @@ class Soap : public Optimizer<DedupedPack> {
                 options_.num_proc
               );
 
-              using Matrix = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
-
-              if (state_.step % options_.decompose_every == 0) {
-                Eigen::Map<Matrix> lvel_format(lvel_slice.data(), width, width);
-                Eigen::Map<Matrix> rvel_format(rvel_slice.data(), height, height);
-
-                Eigen::SelfAdjointEigenSolver<Matrix> lvel_solver(lvel_format);
-                Eigen::SelfAdjointEigenSolver<Matrix> rvel_solver(rvel_format);
-
-                auto leig_new = lvel_solver.eigenvectors();
-                auto reig_new = rvel_solver.eigenvectors();
-
-                Eigen::Map<Matrix>(leig_slice.data(), width, width) = leig_new;
-                Eigen::Map<Matrix>(reig_slice.data(), height, height) = reig_new;
-              }
-
-              detail::parallel(
+              pool_.run(
                 [&](int i) {
                   const auto [x_off, y_off] = offsets(i, wh_width, wh_height);
 
                   detail::triple_tile(
                     std::span<const T>(leig_slice),
                     std::span<const T>(mom_slice),
-                    std::span<const T>(
-                      detail::transpose(std::span<const T>(reig_slice), height, height)
-                    ),
-                    std::span(update),
+                    std::span<const T>(reig_T_slice),
+                    upd_slice,
                     width,
                     width,
                     height,
@@ -288,7 +310,7 @@ class Soap : public Optimizer<DedupedPack> {
                   if (options_.lambda) {
                     detail::fma_tile(
                       std::span<const T>(data_full),
-                      std::span(update),
+                      upd_slice,
                       width,
                       height,
                       wh_width,
@@ -300,7 +322,7 @@ class Soap : public Optimizer<DedupedPack> {
                   }
 
                   detail::fma_tile(
-                    std::span<const T>(update),
+                    std::span<const T>(upd_slice),
                     std::span(data_full),
                     width,
                     height,
@@ -355,9 +377,7 @@ class Soap : public Optimizer<DedupedPack> {
       [&](auto&... param_vecs) {
         (
           [&](auto& param_vec) {
-            for (auto& param_ref : param_vec) {
-              ar(param_ref.get().data());
-            }
+            for (auto& param_ref : param_vec) ar(param_ref.get().data());
           }(param_vecs),
           ...);
       },
@@ -391,9 +411,7 @@ class Soap : public Optimizer<DedupedPack> {
       [&](auto&... param_vecs) {
         (
           [&](auto& param_vec) {
-            for (auto& param_ref : param_vec) {
-              ar(param_ref.get().data());
-            }
+            for (auto& param_ref : param_vec) ar(param_ref.get().data());
           }(param_vecs),
           ...);
       },
@@ -404,9 +422,11 @@ class Soap : public Optimizer<DedupedPack> {
   private:
   SoapState<DedupedPack> state_;
   SoapOptions options_;
+  detail::ThreadPool pool_;
 
   std::string optimizer_type() const override {
     return "Soap<" + detail::type_names(this->parameters_.data) + ">";
   }
 };
+
 }  // namespace mirage::optim

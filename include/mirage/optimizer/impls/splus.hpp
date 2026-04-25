@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "../../detail/matrix.hpp"
-#include "../../detail/utils.hpp"
+#include "../../detail/thread.hpp"
 #include "../optimizer.hpp"
 
 namespace mirage::optim {
@@ -40,6 +40,12 @@ struct SPlusState : public OptimizerState {
   detail::ExtractedVector<TypeTuple> left_eigenvectors{};
   detail::ExtractedVector<TypeTuple> right_eigenvectors{};
   detail::ExtractedVector<TypeTuple> param_ema{};
+
+  detail::ExtractedVector<TypeTuple> tpg{};
+  detail::ExtractedVector<TypeTuple> leig_tp{};
+  detail::ExtractedVector<TypeTuple> reig_tp{};
+  detail::ExtractedVector<TypeTuple> rotated{};
+  detail::ExtractedVector<TypeTuple> update{};
 };
 
 template <typename DedupedPack>
@@ -47,11 +53,11 @@ template <typename DedupedPack>
 class SPlus : public Optimizer<DedupedPack> {
   public:
   explicit SPlus(ParameterPack<DedupedPack> parameters, SPlusOptions options = {})
-    : Optimizer<DedupedPack>(parameters), options_(options) {
+    : Optimizer<DedupedPack>(parameters), options_(options), pool_(options.num_proc) {
     detail::test_multidim(this->parameters_.data);
     detail::test_oom(this->parameters_.data, [&](auto& param) {
-      return 2 *
-             (param.numel() + param.size(0) * param.size(0) + param.strides(0) * param.strides(0));
+      return 4 * param.numel() +
+             3 * (param.size(0) * param.size(0) + param.strides(0) * param.strides(0));
     });
 
     std::apply(
@@ -65,6 +71,11 @@ class SPlus : public Optimizer<DedupedPack> {
             auto& leig = std::get<detail::ExtractType_t<ParamType>>(state_.left_eigenvectors);
             auto& reig = std::get<detail::ExtractType_t<ParamType>>(state_.right_eigenvectors);
             auto& ema = std::get<detail::ExtractType_t<ParamType>>(state_.param_ema);
+            auto& tpg = std::get<detail::ExtractType_t<ParamType>>(state_.tpg);
+            auto& leig_tp = std::get<detail::ExtractType_t<ParamType>>(state_.leig_tp);
+            auto& reig_tp = std::get<detail::ExtractType_t<ParamType>>(state_.reig_tp);
+            auto& rotated = std::get<detail::ExtractType_t<ParamType>>(state_.rotated);
+            auto& update = std::get<detail::ExtractType_t<ParamType>>(state_.update);
             for (auto& param_ref : param_vec) {
               auto& param = param_ref.get();
               int l_numel = param.size(0) * param.size(0);
@@ -77,6 +88,11 @@ class SPlus : public Optimizer<DedupedPack> {
               leig.insert(leig.end(), l_numel, T(0));
               reig.insert(reig.end(), r_numel, T(0));
               ema.insert(ema.end(), param.numel(), T(0));
+              tpg.insert(tpg.end(), param.numel(), T(0));
+              leig_tp.insert(leig_tp.end(), l_numel, T(0));
+              reig_tp.insert(reig_tp.end(), r_numel, T(0));
+              rotated.insert(rotated.end(), param.numel(), T(0));
+              update.insert(update.end(), param.numel(), T(0));
             }
           }(param_vecs),
           ...);
@@ -97,6 +113,11 @@ class SPlus : public Optimizer<DedupedPack> {
             auto& leig_full = std::get<detail::ExtractType_t<ParamType>>(state_.left_eigenvectors);
             auto& reig_full = std::get<detail::ExtractType_t<ParamType>>(state_.right_eigenvectors);
             auto& ema_full = std::get<detail::ExtractType_t<ParamType>>(state_.param_ema);
+            auto& tpg_full = std::get<detail::ExtractType_t<ParamType>>(state_.tpg);
+            auto& leig_tp_full = std::get<detail::ExtractType_t<ParamType>>(state_.leig_tp);
+            auto& reig_tp_full = std::get<detail::ExtractType_t<ParamType>>(state_.reig_tp);
+            auto& rotated_full = std::get<detail::ExtractType_t<ParamType>>(state_.rotated);
+            auto& update_full = std::get<detail::ExtractType_t<ParamType>>(state_.update);
 
             int state_offset = 0;
             int left_offset = 0;
@@ -106,15 +127,6 @@ class SPlus : public Optimizer<DedupedPack> {
               using T = typename ParamType::DataType;
               int width = param_og.size(0);
               int height = param_og.strides(0);
-
-              auto param_tp = param_og.copy();
-              param_tp.view(std::array{width, height});
-              param_tp.transpose(0, 1);
-              param_tp.view(
-                std::rotate(
-                  param_og.size().begin(), param_og.size().begin() + 1, param_og.size().end()
-                )
-              );
 
               int numel_off = param_og.numel();
               int left_off = width * width;
@@ -126,10 +138,18 @@ class SPlus : public Optimizer<DedupedPack> {
               auto reig_slice = std::span(reig_full).subspan(right_offset, right_off);
               auto leig_slice = std::span(leig_full).subspan(left_offset, left_off);
               auto ema_slice = std::span(ema_full).subspan(state_offset, numel_off);
+              auto tpg_slice = std::span(tpg_full).subspan(state_offset, numel_off);
+              auto leig_tp_slice = std::span(leig_tp_full).subspan(left_offset, left_off);
+              auto reig_tp_slice = std::span(reig_tp_full).subspan(right_offset, right_off);
+              auto rotated_slice = std::span(rotated_full).subspan(state_offset, numel_off);
+              auto update_slice = std::span(update_full).subspan(state_offset, numel_off);
 
               auto& og_grad_full = param_og.grad();
-              auto& tp_grad_full = param_tp.grad();
               auto& data_full = param_og.data();
+
+              for (int r = 0; r < width; ++r)
+                for (int c = 0; c < height; ++c)
+                  tpg_slice[c * width + r] = og_grad_full[r * height + c];
 
               constexpr int vec_size = eve::wide<T>::size();
 
@@ -156,8 +176,12 @@ class SPlus : public Optimizer<DedupedPack> {
               const auto [ww_width, ww_height] = chunks(width, width);
               const auto [hh_width, hh_height] = chunks(height, height);
 
-              std::vector<T> rotated(width * height, T(0));
-              detail::parallel(
+              for (int r = 0; r < width; ++r)
+                for (int c = 0; c < width; ++c)
+                  leig_tp_slice[c * width + r] = leig_slice[r * width + c];
+
+              std::fill(rotated_slice.begin(), rotated_slice.end(), T(0));
+              pool_.run(
                 [&](int i) {
                   const auto [wh_x_off, wh_y_off] = offsets(i, wh_width, wh_height);
                   const auto [ww_x_off, ww_y_off] = offsets(i, ww_width, ww_height);
@@ -165,7 +189,7 @@ class SPlus : public Optimizer<DedupedPack> {
 
                   detail::symmetrized_ema_tile(
                     std::span<const T>(og_grad_full),
-                    std::span<const T>(tp_grad_full),
+                    std::span<const T>(tpg_slice),
                     lvel_slice,
                     width,
                     height,
@@ -177,7 +201,7 @@ class SPlus : public Optimizer<DedupedPack> {
                   );
 
                   detail::symmetrized_ema_tile(
-                    std::span<const T>(tp_grad_full),
+                    std::span<const T>(tpg_slice),
                     std::span<const T>(og_grad_full),
                     rvel_slice,
                     height,
@@ -190,12 +214,10 @@ class SPlus : public Optimizer<DedupedPack> {
                   );
 
                   detail::triple_tile(
-                    std::span<const T>(
-                      detail::transpose(std::span<const T>(leig_slice), width, width)
-                    ),
+                    std::span<const T>(leig_tp_slice),
                     std::span<const T>(og_grad_full),
                     std::span<const T>(reig_slice),
-                    std::span(rotated),
+                    rotated_slice,
                     width,
                     width,
                     height,
@@ -208,7 +230,7 @@ class SPlus : public Optimizer<DedupedPack> {
                   );
 
                   detail::ema_tile(
-                    std::span<const T>(rotated),
+                    std::span<const T>(rotated_slice),
                     mom_slice,
                     width,
                     height,
@@ -231,25 +253,24 @@ class SPlus : public Optimizer<DedupedPack> {
                 Eigen::SelfAdjointEigenSolver<Matrix> lvel_solver(lvel_format);
                 Eigen::SelfAdjointEigenSolver<Matrix> rvel_solver(rvel_format);
 
-                auto leig_new = lvel_solver.eigenvectors();
-                auto reig_new = rvel_solver.eigenvectors();
-
-                Eigen::Map<Matrix>(leig_slice.data(), width, width) = leig_new;
-                Eigen::Map<Matrix>(reig_slice.data(), height, height) = reig_new;
+                Eigen::Map<Matrix>(leig_slice.data(), width, width) = lvel_solver.eigenvectors();
+                Eigen::Map<Matrix>(reig_slice.data(), height, height) = rvel_solver.eigenvectors();
               }
 
-              std::vector<T> update(width * height, T(0));
-              detail::parallel(
+              for (int r = 0; r < height; ++r)
+                for (int c = 0; c < height; ++c)
+                  reig_tp_slice[c * height + r] = reig_slice[r * height + c];
+
+              std::fill(update_slice.begin(), update_slice.end(), T(0));
+              pool_.run(
                 [&](int i) {
                   const auto [x_off, y_off] = offsets(i, wh_width, wh_height);
 
                   detail::norm_triple_sign_tile(
                     std::span<const T>(leig_slice),
                     std::span<const T>(mom_slice),
-                    std::span<const T>(
-                      detail::transpose(std::span<const T>(reig_slice), height, height)
-                    ),
-                    std::span(update),
+                    std::span<const T>(reig_tp_slice),
+                    update_slice,
                     width,
                     width,
                     height,
@@ -261,8 +282,8 @@ class SPlus : public Optimizer<DedupedPack> {
                   );
 
                   detail::fma_tile(
-                    std::span<const T>(update),
-                    std::span(ema_slice),
+                    std::span<const T>(update_slice),
+                    ema_slice,
                     width,
                     height,
                     wh_width,
@@ -275,7 +296,7 @@ class SPlus : public Optimizer<DedupedPack> {
                   if (options_.lambda) {
                     detail::fma_tile(
                       std::span<const T>(data_full),
-                      std::span(ema_slice),
+                      ema_slice,
                       width,
                       height,
                       wh_width,
@@ -391,6 +412,7 @@ class SPlus : public Optimizer<DedupedPack> {
   private:
   SPlusOptions options_;
   SPlusState<DedupedPack> state_;
+  detail::ThreadPool pool_;
 
   std::string optimizer_type() const override {
     return "SPlus<" + detail::type_names(this->parameters_.data) + ">";

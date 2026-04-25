@@ -4,6 +4,7 @@
 #include <fstream>
 #include <stdexcept>
 
+#include "../../detail/thread.hpp"
 #include "../../detail/utils.hpp"
 #include "../optimizer.hpp"
 
@@ -37,7 +38,7 @@ template <typename DedupedPack>
 class SVRG : public Optimizer<DedupedPack> {
   public:
   explicit SVRG(ParameterPack<DedupedPack> parameters, SVRGOptions options = {})
-    : Optimizer<DedupedPack>(parameters), options_(options) {
+    : Optimizer<DedupedPack>(parameters), options_(options), pool_(options.num_proc) {
     detail::test_oom(this->parameters_.data, [&](auto& param) { return 3 * param.numel(); });
 
     std::apply(
@@ -101,7 +102,7 @@ class SVRG : public Optimizer<DedupedPack> {
 
               int chunk_size = (param.numel() + options_.num_proc - 1) / options_.num_proc;
 
-              detail::parallel(
+              pool_.run(
                 [&](int i) {
                   int start = i * chunk_size;
                   int end = std::min(start + chunk_size, param.numel());
@@ -226,5 +227,6 @@ class SVRG : public Optimizer<DedupedPack> {
   private:
   SVRGOptions options_;
   SVRGState<DedupedPack> state_;
+  detail::ThreadPool pool_;
 };
 }  // namespace mirage::optim
