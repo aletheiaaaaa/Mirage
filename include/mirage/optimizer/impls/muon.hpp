@@ -2,8 +2,10 @@
 
 #include <Eigen/Core>
 #include <Eigen/Eigenvalues>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <span>
 #include <stdexcept>
 #include <tuple>
 #include <utility>
@@ -72,33 +74,186 @@ class Muon : public Optimizer<DedupedPack> {
 
             int state_offset = 0;
             for (auto& param_ref : param_vec) {
-              auto& param_og = param_ref.get();
+              auto& param = param_ref.get();
               using T = typename ParamType::DataType;
-              int width = param_og.size(0);
-              int height = param_og.strides(0);
+              int width = param.size(0);
+              int height = param.strides(0);
 
-              auto param_tp = param_og.copy();
-              param_tp.view(std::array{width, height});
-              param_tp.transpose(0, 1);
-              param_tp.view(
-                std::rotate(
-                  param_og.size().begin(), param_og.size().begin() + 1, param_og.size().end()
-                )
-              );
+              auto og_mom_slice = std::span(mom_full).subspan(state_offset, param.numel());
 
-              auto& grad_full = param_og.grad();
-              auto& data_full = param_og.data();
+              auto& grad_full = param.grad();
+              auto& data_full = param.data();
 
               constexpr int vec_size = eve::wide<T>::size();
 
-              int chunk_size = (param_og.numel() + options_.num_proc - 1) / options_.num_proc;
+              const auto chunks = [&](int chunk_width, int chunk_height) {
+                if (options_.num_proc % 2) {
+                  return std::make_pair(
+                    (chunk_width + options_.num_proc - 1) / options_.num_proc, chunk_height
+                  );
+                }
+                return std::make_pair(
+                  (2 * chunk_width + options_.num_proc - 1) / options_.num_proc,
+                  (chunk_height + 1) / 2
+                );
+              };
+
+              const auto offsets = [&](int id, int chunk_width, int chunk_height) {
+                if (options_.num_proc % 2) {
+                  return std::make_pair(id * chunk_width, 0);
+                }
+                return std::make_pair((id / 2) * chunk_width, (id % 2) * chunk_height);
+              };
+
+              int smaller = std::min(width, height);
+              int larger = std::max(width, height);
+
+              const auto [sq_width, sq_height] = chunks(smaller, smaller);
+              const auto [rc_width, rc_height] = chunks(smaller, larger);
+              const auto [og_width, og_height] = chunks(width, height);
 
               detail::parallel(
                 [&](int i) {
-                  // TODO: actually do this;
+                  const auto [x_off, y_off] = offsets(i, og_width, og_height);
+                  detail::fma_tile(
+                    std::span<const T>(grad_full),
+                    std::span<T>(og_mom_slice),
+                    width,
+                    height,
+                    std::min(og_width, width - x_off),
+                    std::min(og_height, height - y_off),
+                    x_off,
+                    y_off,
+                    options_.momentum
+                  );
                 },
                 options_.num_proc
               );
+
+              // TODO: add frobenius normalization;
+
+              auto tp_mom_slice =
+                detail::transpose(std::span<const T>(og_mom_slice), height, width);
+
+              std::vector<T> og_mom, tp_mom;
+
+              if (width > height) {
+                og_mom = std::move(tp_mom_slice);
+                tp_mom = std::vector<T>(og_mom_slice.begin(), og_mom_slice.end());
+              } else {
+                og_mom = std::vector<T>(og_mom_slice.begin(), og_mom_slice.end());
+                tp_mom = std::move(tp_mom_slice);
+              }
+
+              for (int iter = 0; iter < options_.newton_schulz_iters; ++iter) {
+                std::vector<T> step1(smaller * smaller, T(0));
+                detail::parallel(
+                  [&](int i) {
+                    const auto [sq_x_off, sq_y_off] = offsets(i, sq_width, sq_height);
+
+                    detail::symmetrized_tile(
+                      std::span<const T>(og_mom),
+                      std::span<const T>(tp_mom),
+                      std::span<T>(step1),
+                      smaller,
+                      larger,
+                      std::min(sq_width, smaller - sq_x_off),
+                      std::min(sq_height, smaller - sq_y_off),
+                      sq_x_off,
+                      sq_y_off
+                    );
+                  },
+                  options_.num_proc
+                );
+
+                std::vector<T> step2(smaller * smaller, T(0));
+                detail::parallel(
+                  [&](int i) {
+                    const auto [sq_x_off, sq_y_off] = offsets(i, sq_width, sq_height);
+
+                    detail::quadratic_tile(
+                      std::span<const T>(step1),
+                      std::span<T>(step2),
+                      -4.7750f,
+                      2.0315f,
+                      smaller,
+                      std::min(sq_width, smaller - sq_x_off),
+                      std::min(sq_height, smaller - sq_y_off),
+                      sq_x_off,
+                      sq_y_off
+                    );
+                  },
+                  options_.num_proc
+                );
+
+                std::vector<T> step3(smaller * larger, T(0));
+                detail::parallel(
+                  [&](int i) {
+                    const auto [rc_x_off, rc_y_off] = offsets(i, rc_width, rc_height);
+
+                    detail::ns_final_tile(
+                      std::span<const T>(step2),
+                      std::span<const T>(og_mom),
+                      std::span<T>(step3),
+                      3.4445f,
+                      smaller,
+                      larger,
+                      std::min(rc_width, smaller - rc_x_off),
+                      std::min(rc_height, larger - rc_y_off),
+                      rc_x_off,
+                      rc_y_off
+                    );
+                  },
+                  options_.num_proc
+                );
+
+                og_mom = step3;
+                tp_mom = detail::transpose(std::span<const T>(step3), larger, smaller);
+              }
+
+              auto span = std::span<const T>(og_mom);
+              if (width > height) {
+                auto transposed = detail::transpose(span, smaller, larger);
+                std::copy(transposed.begin(), transposed.end(), og_mom_slice.begin());
+              } else {
+                std::copy(span.begin(), span.end(), og_mom_slice.begin());
+              }
+
+              auto& update = (width > height) ? og_mom : tp_mom;
+
+              detail::parallel(
+                [&](int i) {
+                  const auto [x_off, y_off] = offsets(i, og_width, og_height);
+                  if (options_.lambda) {
+                    detail::fma_tile(
+                      std::span<const T>(data_full),
+                      std::span(update),
+                      width,
+                      height,
+                      og_width,
+                      og_height,
+                      x_off,
+                      y_off,
+                      -options_.lambda
+                    );
+                  }
+
+                  detail::fma_tile(
+                    std::span<const T>(update),
+                    std::span(data_full),
+                    width,
+                    height,
+                    og_width,
+                    og_height,
+                    x_off,
+                    y_off,
+                    options_.lr
+                  );
+                },
+                options_.num_proc
+              );
+
+              state_offset += param.numel();
             }
           }(param_vecs),
           ...);
@@ -168,7 +323,7 @@ class Muon : public Optimizer<DedupedPack> {
   MuonOptions options_;
   MuonState<DedupedPack> state_;
 
-  std::string optimizer_type() {
+  std::string optimizer_type() const override {
     return "Muon<" + detail::type_names(this->parameters_.data) + ">";
   }
 };

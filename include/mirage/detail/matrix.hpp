@@ -487,7 +487,7 @@ void ns_final_tile(
   constexpr int vec_size = eve::wide<T>::size();
   constexpr int arr_size = x_height * y_height;
 
-  x_chunk = std::min(x_chunk, N - x_off);
+  x_chunk = std::min(x_chunk, M - x_off);
   y_chunk = std::min(y_chunk, N - y_off);
 
   for (int i = 0; i < x_chunk; i += x_height) {
@@ -499,13 +499,13 @@ void ns_final_tile(
       std::array<eve::wide<T>, arr_size> acc;
       std::ranges::fill(acc, eve::wide<T>(T(0)));
 
-      for (int k = 0; k < N; ++k) {
+      for (int k = 0; k < M; ++k) {
         std::array<eve::wide<T>, x_height> tile0;
         std::array<eve::wide<T>, y_height> tile1;
 
         unroll<x_height>([&]<int idx>() {
           tile0[idx] =
-            (idx < i_rem) ? eve::wide<T>(B[(x_off + i + idx) * N + k]) : eve::wide<T>(T(0));
+            (idx < i_rem) ? eve::wide<T>(B[(x_off + i + idx) * M + k]) : eve::wide<T>(T(0));
         });
 
         unroll<y_height>([&]<int idx>() {

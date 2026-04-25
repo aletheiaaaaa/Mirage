@@ -132,7 +132,7 @@ class Soap : public Optimizer<DedupedPack> {
 
               constexpr int vec_size = eve::wide<T>::size();
 
-              auto compute_chunks = [&](int chunk_width, int chunk_height) {
+              auto chunks = [&](int chunk_width, int chunk_height) {
                 if (options_.num_proc % 2) {
                   return std::make_pair(
                     (chunk_width + options_.num_proc - 1) / options_.num_proc, chunk_height
@@ -151,9 +151,9 @@ class Soap : public Optimizer<DedupedPack> {
                 return std::make_pair((id / 2) * chunk_width, (id % 2) * chunk_height);
               };
 
-              const auto [wh_width, wh_height] = compute_chunks(width, height);
-              const auto [ww_width, ww_height] = compute_chunks(width, width);
-              const auto [hh_width, hh_height] = compute_chunks(height, height);
+              const auto [wh_width, wh_height] = chunks(width, height);
+              const auto [ww_width, ww_height] = chunks(width, width);
+              const auto [hh_width, hh_height] = chunks(height, height);
 
               std::vector<T> rotated(width * height, T(0));
               std::vector<T> update(width * height, T(0));
