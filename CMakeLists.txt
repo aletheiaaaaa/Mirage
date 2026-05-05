@@ -70,6 +70,22 @@ else()
   set(MIRAGE_EIGEN_FETCHED TRUE)
 endif()
 
+find_path(RANDOM123_INCLUDE_DIR Random123/threefry.h)
+if(RANDOM123_INCLUDE_DIR)
+  message(STATUS "Found Random123 headers: ${RANDOM123_INCLUDE_DIR}")
+  set(MIRAGE_RANDOM123_FOUND TRUE)
+else()
+  message(STATUS "Random123 not found — fetching via FetchContent")
+  FetchContent_Declare(
+    random123
+    GIT_REPOSITORY https://github.com/DEShawResearch/random123.git
+    GIT_TAG v1.14.0
+    EXCLUDE_FROM_ALL
+  )
+  FetchContent_MakeAvailable(random123)
+  set(MIRAGE_RANDOM123_FETCHED TRUE)
+endif()
+
 # Header-only library target
 add_library(mirage INTERFACE)
 add_library(mirage::mirage ALIAS mirage)
@@ -102,6 +118,12 @@ if(MIRAGE_EIGEN_FOUND)
   target_include_directories(mirage INTERFACE ${EIGEN_INCLUDE_DIR})
 else()
   target_include_directories(mirage INTERFACE $<BUILD_INTERFACE:${eigen_SOURCE_DIR}>)
+endif()
+
+if(MIRAGE_RANDOM123_FOUND)
+  target_include_directories(mirage INTERFACE ${RANDOM123_INCLUDE_DIR})
+else()
+  target_include_directories(mirage INTERFACE $<BUILD_INTERFACE:${random123_SOURCE_DIR}/include>)
 endif()
 
 # Compiler-specific settings
@@ -197,6 +219,12 @@ if(MIRAGE_EIGEN_FETCHED)
   )
 endif()
 
+if(MIRAGE_RANDOM123_FETCHED)
+  install(DIRECTORY ${random123_SOURCE_DIR}/include/Random123
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  )
+endif()
+
 # Export targets
 install(EXPORT mirageTargets
   FILE mirageTargets.cmake
@@ -264,34 +292,6 @@ foreach(file \${files})
     message(STATUS \"File \$ENV{DESTDIR}\${file} does not exist.\")
   endif()
 endforeach()
-
-set(MIRAGE_EVE_FETCHED ${MIRAGE_EVE_FETCHED})
-set(MIRAGE_CEREAL_FETCHED ${MIRAGE_CEREAL_FETCHED})
-set(MIRAGE_EIGEN_FETCHED ${MIRAGE_EIGEN_FETCHED})
-
-if(MIRAGE_EVE_FETCHED)
-  set(eve_dir \"${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/eve\")
-  if(EXISTS \"\${eve_dir}\")
-    message(STATUS \"Removing eve directory: \${eve_dir}\")
-    file(REMOVE_RECURSE \"\${eve_dir}\")
-  endif()
-endif()
-
-if(MIRAGE_CEREAL_FETCHED)
-  set(cereal_dir \"${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/cereal\")
-  if(EXISTS \"\${cereal_dir}\")
-    message(STATUS \"Removing cereal directory: \${cereal_dir}\")
-    file(REMOVE_RECURSE \"\${cereal_dir}\")
-  endif()
-endif()
-
-if(MIRAGE_EIGEN_FETCHED)
-  set(eigen_dir \"${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/Eigen\")
-  if(EXISTS \"\${eigen_dir}\")
-    message(STATUS \"Removing Eigen directory: \${eigen_dir}\")
-    file(REMOVE_RECURSE \"\${eigen_dir}\")
-  endif()
-endif()
 
 set(mirage_dir \"${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_INCLUDEDIR}/mirage\")
 if(EXISTS \"\${mirage_dir}\")
