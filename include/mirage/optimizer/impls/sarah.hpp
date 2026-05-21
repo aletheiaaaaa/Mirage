@@ -12,7 +12,6 @@ namespace mirage::optim {
 struct SarahOptions {
   float lr = 0.01f;
   float lambda = 0.0f;
-  int recompute_every = 64;
 
   bool maximize = false;
 
@@ -20,7 +19,7 @@ struct SarahOptions {
 
   template <class Archive>
   void serialize(Archive& ar) {
-    ar(lr, lambda, recompute_every, maximize);
+    ar(lr, lambda, maximize);
   }
 };
 
@@ -36,11 +35,6 @@ class Sarah : public Optimizer<DedupedPack> {
   public:
   explicit Sarah(ParameterPack<DedupedPack> parameters, SarahOptions options = {})
     : Optimizer<DedupedPack>(parameters), options_(options), pool_(options.num_proc) {
-    if ((options_.recompute_every != -1) && options_.recompute_every == 0)
-      throw std::invalid_argument(
-        "Recompute every must be greater than 0 when recompute is enabled"
-      );
-
     detail::test_oom(this->parameters_.data, [&](auto& param) { return 2 * param.numel(); });
 
     std::apply(
@@ -61,10 +55,6 @@ class Sarah : public Optimizer<DedupedPack> {
       },
       this->parameters_.data
     );
-  }
-
-  bool recompute() const override {
-    return (options_.recompute_every != -1) && state_.step % options_.recompute_every == 0;
   }
 
   void step() override {
@@ -104,12 +94,6 @@ class Sarah : public Optimizer<DedupedPack> {
                       if (!options_.maximize) grad = -grad;
 
                       auto update = [&]() {
-                        if (
-                          (options_.recompute_every != -1) &&
-                          state_.step % options_.recompute_every == 0
-                        )
-                          return grad;
-
                         eve::wide<T> prev_grad(&prev_grad_full[state_offset + j + offset]);
                         eve::wide<T> prev_update(&prev_update_full[state_offset + j + offset]);
 
@@ -129,11 +113,8 @@ class Sarah : public Optimizer<DedupedPack> {
 
                   for (; j < end; ++j) {
                     T grad = options_.maximize ? grad_full[j] : -grad_full[j];
-                    T update = ((options_.recompute_every != -1) &&
-                                state_.step % options_.recompute_every == 0)
-                                 ? grad
-                                 : grad - prev_grad_full[state_offset + j] +
-                                     prev_update_full[state_offset + j];
+                    T update =
+                      grad - prev_grad_full[state_offset + j] + prev_update_full[state_offset + j];
 
                     if (options_.lambda) update = update - options_.lambda * data_full[j];
 
