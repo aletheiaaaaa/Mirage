@@ -4,7 +4,6 @@
 #include <fstream>
 #include <stdexcept>
 
-#include "../../detail/thread.hpp"
 #include "../../detail/utils.hpp"
 #include "../optimizer.hpp"
 
@@ -34,7 +33,7 @@ template <typename DedupedPack>
 class Sarah : public Optimizer<DedupedPack> {
   public:
   explicit Sarah(ParameterPack<DedupedPack> parameters, SarahOptions options = {})
-    : Optimizer<DedupedPack>(parameters), options_(options), pool_(options.num_proc) {
+    : Optimizer<DedupedPack>(parameters, options.num_proc), options_(options) {
     detail::test_oom(this->parameters_.data, [&](auto& param) { return 2 * param.numel(); });
 
     std::apply(
@@ -196,7 +195,6 @@ class Sarah : public Optimizer<DedupedPack> {
   private:
   SarahOptions options_;
   SarahState<DedupedPack> state_;
-  detail::ThreadPool pool_;
 
   std::string optimizer_type() const override {
     return "Sarah<" + detail::type_names(this->parameters_.data) + ">";

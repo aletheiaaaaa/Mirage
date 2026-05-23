@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "../../detail/matrix.hpp"
-#include "../../detail/thread.hpp"
 #include "../optimizer.hpp"
 
 namespace mirage::optim {
@@ -44,7 +43,7 @@ template <typename DedupedPack>
 class Muon : public Optimizer<DedupedPack> {
   public:
   explicit Muon(ParameterPack<DedupedPack> parameters, MuonOptions options = {})
-    : Optimizer<DedupedPack>(parameters), options_(options), pool_(options.num_proc) {
+    : Optimizer<DedupedPack>(parameters, options.num_proc), options_(options) {
     detail::test_multidim(this->parameters_.data);
     detail::test_oom(this->parameters_.data, [&](auto& param) {
       auto s = std::min(param.size(0), param.strides(0));
@@ -372,7 +371,6 @@ class Muon : public Optimizer<DedupedPack> {
   private:
   MuonOptions options_;
   MuonState<DedupedPack> state_;
-  detail::ThreadPool pool_;
 
   std::string optimizer_type() const override {
     return "Muon<" + detail::type_names(this->parameters_.data) + ">";

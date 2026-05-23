@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "../../detail/matrix.hpp"
-#include "../../detail/thread.hpp"
 #include "../optimizer.hpp"
 
 namespace mirage::optim {
@@ -54,7 +53,7 @@ template <typename DedupedPack>
 class SPlus : public Optimizer<DedupedPack> {
   public:
   explicit SPlus(ParameterPack<DedupedPack> parameters, SPlusOptions options = {})
-    : Optimizer<DedupedPack>(parameters), options_(options), pool_(options.num_proc) {
+    : Optimizer<DedupedPack>(parameters, options.num_proc), options_(options) {
     detail::test_multidim(this->parameters_.data);
     detail::test_oom(this->parameters_.data, [&](auto& param) {
 
@@ -428,7 +427,6 @@ class SPlus : public Optimizer<DedupedPack> {
   private:
   SPlusOptions options_;
   SPlusState<DedupedPack> state_;
-  detail::ThreadPool pool_;
 
   std::string optimizer_type() const override {
     return "SPlus<" + detail::type_names(this->parameters_.data) + ">";

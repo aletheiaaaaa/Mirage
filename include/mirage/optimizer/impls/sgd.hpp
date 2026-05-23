@@ -4,7 +4,6 @@
 #include <fstream>
 #include <stdexcept>
 
-#include "../../detail/thread.hpp"
 #include "../../detail/utils.hpp"
 #include "../optimizer.hpp"
 
@@ -35,7 +34,7 @@ template <typename DedupedPack>
 class SGD : public Optimizer<DedupedPack> {
   public:
   explicit SGD(ParameterPack<DedupedPack> parameters, SGDOptions options = {})
-    : Optimizer<DedupedPack>(parameters), options_(options), pool_(options.num_proc) {
+    : Optimizer<DedupedPack>(parameters, options.num_proc), options_(options) {
     detail::test_oom(this->parameters_.data, [&](auto& param) { return param.numel(); });
 
     std::apply(
@@ -197,7 +196,6 @@ class SGD : public Optimizer<DedupedPack> {
   private:
   SGDOptions options_;
   SGDState<DedupedPack> state_;
-  detail::ThreadPool pool_;
 
   std::string optimizer_type() const override {
     return "SGD<" + detail::type_names(this->parameters_.data) + ">";

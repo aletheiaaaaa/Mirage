@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "../../detail/matrix.hpp"
-#include "../../detail/thread.hpp"
 #include "../optimizer.hpp"
 
 namespace mirage::optim {
@@ -51,7 +50,7 @@ template <typename DedupedPack>
 class Soap : public Optimizer<DedupedPack> {
   public:
   explicit Soap(ParameterPack<DedupedPack> parameters, SoapOptions options = {})
-    : Optimizer<DedupedPack>(parameters), options_(options), pool_(options.num_proc) {
+    : Optimizer<DedupedPack>(parameters, options.num_proc), options_(options) {
     detail::test_multidim(this->parameters_.data);
     detail::test_oom(this->parameters_.data, [&](auto& param) {
       return 6 * param.numel() + 3 * param.size(0) * param.size(0) +
@@ -440,7 +439,6 @@ class Soap : public Optimizer<DedupedPack> {
   private:
   SoapState<DedupedPack> state_;
   SoapOptions options_;
-  detail::ThreadPool pool_;
 
   std::string optimizer_type() const override {
     return "Soap<" + detail::type_names(this->parameters_.data) + ">";

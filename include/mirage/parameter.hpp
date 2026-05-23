@@ -14,9 +14,7 @@
 #include <fstream>
 #include <functional>
 #include <initializer_list>
-#include <limits>
 #include <numeric>
-#include <ranges>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -27,46 +25,12 @@
 #include "detail/utils.hpp"
 
 namespace mirage {
-struct Range {
-  static constexpr int Start = 0;
-  static constexpr int End = std::numeric_limits<int>::max();
-
-  int start, end;
-
-  Range(int idx) : start(idx), end(idx) {};
-  Range(int idx0, int idx1) : start(idx0), end(idx1) {};
-  Range() : start(Start), end(End) {};
-};
-
 namespace detail {
 struct ViewParams {
   int offset;
   std::vector<int> shape;
   std::vector<int> strides;
 };
-
-inline ViewParams compute_view(
-  std::span<const Range> slices, std::span<const int> src_shape, std::span<const int> src_strides
-) {
-  int offset = 0;
-
-  std::vector<int> shape;
-  std::vector<int> strides;
-
-  for (const auto& [idx, slice] : std::views::enumerate(slices)) {
-    assert((slice.end <= src_shape[idx] || slice.end == Range::End) && "Array index out of bounds");
-    assert((slice.start <= slice.end + 1) && "Slice should begin before it ends");
-
-    offset += slice.start * src_strides[idx];
-    int dim_size = std::min(slice.end, src_shape[idx]) - slice.start;
-    if (dim_size > 0) {
-      shape.push_back(dim_size);
-      strides.push_back(src_strides[idx]);
-    }
-  }
-
-  return ViewParams{.offset = offset, .shape = std::move(shape), .strides = std::move(strides)};
-}
 
 inline std::vector<int> compute_view_idx(
   int offset, std::span<const int> shape, std::span<const int> strides
@@ -121,166 +85,19 @@ inline std::vector<int> compute_transpose_idx(
 
 template <typename T>
   requires std::is_floating_point_v<T>
-class Parameter;
-
-template <typename T>
-  requires std::is_floating_point_v<T>
-class View {
-  public:
-  using is_param_like = std::true_type;
-  using DataType = T;
-
-  View(Parameter<T>& ref, int offset, std::vector<int> shape, std::vector<int> strides)
-    : ref_(ref), offset_(offset), shape_(std::move(shape)), strides_(std::move(strides)) {}
-
-  template <typename... Args>
-    requires(std::convertible_to<Args, Range> && ...)
-  View<T> operator[](Args... args) {
-    std::vector<Range> slices{args...};
-    assert((slices.size() <= shape_.size()) && "There cannot be more slices than dimensions");
-    while (slices.size() < shape_.size()) {
-      slices.emplace_back();
-    }
-
-    auto params = detail::compute_view(slices, shape_, strides_);
-    return View<T>(
-      ref_.get(), offset_ + params.offset, std::move(params.shape), std::move(params.strides)
-    );
-  }
-
-  template <typename... Args>
-    requires(std::convertible_to<Args, Range> && ...)
-  const View<const T> operator[](Args... args) const {
-    std::vector<Range> slices{args...};
-    assert((slices.size() <= shape_.size()) && "There cannot be more slices than dimensions");
-    while (slices.size() < shape_.size()) {
-      slices.emplace_back();
-    }
-
-    auto params = detail::compute_view(slices, shape_, strides_);
-    return View<const T>(
-      ref_.get(), offset_ + params.offset, std::move(params.shape), std::move(params.strides)
-    );
-  }
-
-  std::vector<T> materialize() {
-    std::vector<T> result(numel());
-    detail::collect(
-      std::span<const T>(data()), std::span<T>(result), std::span<const T>(indices()), numel()
-    );
-
-    return result;
-  }
-
-  void fill(const std::initializer_list<T>& new_data) {
-    assert(new_data.size() == numel() && "Data size does not match view size");
-    auto& idx = indices();
-
-    constexpr int vec_size = eve::wide<T>::size();
-    const int unroll_factor = detail::UNROLL_FACTOR;
-
-    int i = 0;
-    for (; i + vec_size * unroll_factor <= new_data.size(); i += vec_size * unroll_factor) {
-      detail::unroll<unroll_factor>([&]<int index>() {
-        constexpr int off = index * vec_size;
-
-        eve::wide<T> vals(&new_data[i + off]);
-        for (int k = 0; k < vec_size; ++k) {
-          data()[idx[i + off + k]] = vals.get(k);
-        }
-      });
-    }
-
-    for (; i < new_data.size(); ++i) {
-      data()[idx[i]] = new_data[i];
-    }
-  }
-
-  template <typename S>
-    requires detail::NestedSpan<S, T>
-  View& operator=(const S& new_data) {
-    auto new_shape = detail::deduce_shape(new_data);
-    assert(new_shape == shape_ && "Cannot assign to view with data of different shape");
-    auto& idx = indices();
-
-    detail::fill(new_data, new_shape, [&](const auto& leaf, int offset) {
-      int i = 0;
-
-      constexpr int vec_size = eve::wide<T>::size();
-      constexpr int unroll_factor = detail::UNROLL_FACTOR;
-
-      for (; i + vec_size * unroll_factor <= leaf.size(); i += vec_size * unroll_factor) {
-        detail::unroll<unroll_factor>([&]<int index>() {
-          constexpr int off = index * vec_size;
-
-          eve::wide<T> vals(&leaf[i + off]);
-          for (int k = 0; k < vec_size; ++k) {
-            data()[idx[offset + i + off + k]] = vals.get(k);
-          }
-        });
-      }
-      for (; i < leaf.size(); ++i) {
-        data()[idx[offset + i]] = leaf[i];
-      }
-    });
-    return *this;
-  }
-
-  std::vector<T>& grad() { return ref_.get().grad(); }
-  const std::vector<T>& grad() const { return ref_.get().grad(); }
-
-  std::vector<T>& data() { return ref_.get().data(); }
-  const std::vector<T>& data() const { return ref_.get().data(); }
-
-  const std::vector<int>& size() const { return shape_; }
-  int size(int i) const { return shape_[i]; }
-
-  const std::vector<int>& strides() const { return strides_; }
-  int strides(int i) const { return strides_[i]; };
-
-  int rank() const { return shape_.size(); }
-  int numel() const {
-    return std::accumulate(shape_.begin(), shape_.end(), int{1}, std::multiplies<int>{});
-  }
-
-  private:
-  std::reference_wrapper<Parameter<std::remove_const_t<T>>> ref_;
-  int offset_;
-  std::vector<int> shape_;
-  std::vector<int> strides_;
-  std::vector<int> indices_;
-
-  std::vector<int>& indices() {
-    if (indices_.empty() && !shape_.empty()) {
-      indices_ = detail::compute_view_idx(offset_, shape_, strides_);
-    }
-    return indices_;
-  }
-
-  bool is_contiguous() const {
-    int expected_stride = 1;
-    for (int i = shape_.size(); i-- > 0;) {
-      if (strides_[i] != expected_stride) return false;
-      expected_stride *= shape_[i];
-    }
-    return true;
-  }
-};
-
-template <typename T>
-  requires std::is_floating_point_v<T>
 class Parameter {
   public:
   using is_param_like = std::true_type;
   using is_quantized = std::false_type;
   using DataType = T;
 
-  explicit Parameter(std::initializer_list<int> shape)
-    : Parameter(std::vector<int>(shape.begin(), shape.end())) {}
+  explicit Parameter(std::initializer_list<int> shape, T attentuation = static_cast<T>(1.0))
+    : Parameter(std::vector<int>(shape.begin(), shape.end()), attentuation) {}
 
   template <typename S>
     requires detail::NestedSpan<S, T>
-  explicit Parameter(const S& span) {
+  explicit Parameter(const S& span, T attenuation = static_cast<T>(1.0))
+    : attenuation_(attenuation) {
     detail::unpack(span, shape_, data_, strides_);
     grad_.resize(data_.size());
   }
@@ -356,37 +173,6 @@ class Parameter {
 
   int rank() const { return shape_.size(); }
   int numel() const { return data_.size(); }
-
-  template <typename... Args>
-    requires(std::convertible_to<Args, Range> && ...)
-  View<T> operator[](Args... args) {
-    std::vector<Range> slices{args...};
-    assert((slices.size() <= shape_.size()) && "There cannot be more slices than dimensions");
-    while (slices.size() < shape_.size()) {
-      slices.emplace_back();
-    }
-
-    auto params = detail::compute_view(slices, shape_, strides_);
-    return View<T>(*this, params.offset, std::move(params.shape), std::move(params.strides));
-  }
-
-  template <typename... Args>
-    requires(std::convertible_to<Args, Range> && ...)
-  const View<const T> operator[](Args... args) const {
-    std::vector<Range> slices{args...};
-    assert((slices.size() <= shape_.size()) && "There cannot be more slices than dimensions");
-    while (slices.size() < shape_.size()) {
-      slices.emplace_back();
-    }
-
-    auto params = detail::compute_view(slices, shape_, strides_);
-    return View<const T>(
-      const_cast<Parameter<T>&>(*this),
-      params.offset,
-      std::move(params.shape),
-      std::move(params.strides)
-    );
-  }
 
   template <typename S>
     requires detail::NestedSpan<S, T>
@@ -473,8 +259,10 @@ class Parameter {
   std::vector<int> strides_;
   std::vector<T> data_;
   std::vector<T> grad_;
+  T attenuation_;
 
-  explicit Parameter(const std::vector<int>& shape) : shape_(std::move(shape)) {
+  explicit Parameter(const std::vector<int>& shape, T attentuation = 1.0)
+    : shape_(std::move(shape)), attenuation_(attentuation) {
     strides_.resize(shape_.size());
     std::exclusive_scan(
       shape_.rbegin(), shape_.rend(), strides_.rbegin(), int{1}, std::multiplies<int>{}

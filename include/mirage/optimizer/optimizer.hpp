@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <sstream>
 
+#include "../detail/thread.hpp"
 #include "../parameter.hpp"
 
 namespace mirage {
@@ -66,7 +67,8 @@ template <typename DedupedPack>
   requires detail::NonConstPack<DedupedPack>
 class Optimizer {
   public:
-  explicit Optimizer(ParameterPack<DedupedPack> parameters) : parameters_(parameters) {}
+  explicit Optimizer(ParameterPack<DedupedPack> parameters, int num_proc = 1)
+    : parameters_(parameters), pool_(num_proc) {}
 
   void zero_grad() {
     std::apply(
@@ -93,6 +95,7 @@ class Optimizer {
 
   protected:
   ParameterPack<DedupedPack> parameters_;
+  detail::ThreadPool pool_;
 
   virtual std::string optimizer_type() const = 0;
 
