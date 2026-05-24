@@ -57,7 +57,7 @@ class SPlus : public Optimizer<DedupedPack> {
     detail::test_multidim(this->parameters_.data);
     detail::test_oom(this->parameters_.data, [&](auto& param) {
 
-      return 5 * param.numel() +
+      return 6 * param.numel() +
              3 * (param.size(0) * param.size(0) + param.strides(0) * param.strides(0));
     });
 
@@ -179,7 +179,7 @@ class SPlus : public Optimizer<DedupedPack> {
                 std::span<const T>(reig_slice), std::span<T>(reig_tp_slice), height, height
               );
 
-              pool_.run(
+              this->pool_.run(
                 [&](int i) {
                   const auto [wh_x_off, wh_y_off] = offsets(i, wh_width, wh_height);
                   const auto [ww_x_off, ww_y_off] = offsets(i, ww_width, ww_height);
@@ -266,7 +266,7 @@ class SPlus : public Optimizer<DedupedPack> {
                 Eigen::Map<Matrix>(reig_slice.data(), height, height) = rvel_solver.eigenvectors();
               }
 
-              pool_.run(
+              this->pool_.run(
                 [&](int i) {
                   const auto [x_off, y_off] = offsets(i, wh_width, wh_height);
 

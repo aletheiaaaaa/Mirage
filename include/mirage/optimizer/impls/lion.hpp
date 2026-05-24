@@ -78,7 +78,7 @@ class Lion : public Optimizer<DedupedPack> {
 
               int chunk_size = (param.numel() + options_.num_proc - 1) / options_.num_proc;
 
-              pool_.run(
+              this->pool_.run(
                 [&](int i) {
                   int start = i * chunk_size;
                   int end = std::min(start + chunk_size, param.numel());
@@ -106,7 +106,7 @@ class Lion : public Optimizer<DedupedPack> {
 
                       eve::wide<T> beta2(options_.beta2);
                       mom = eve::fma(beta2, mom, grad);
-                      mom = eve::fnma(beta2, grad, mom);
+                      mom = eve::fnma(beta2, grad, update);
                       eve::store(mom, &mom_full[state_offset + j + offset]);
                     });
                   }

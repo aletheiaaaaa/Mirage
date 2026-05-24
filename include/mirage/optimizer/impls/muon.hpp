@@ -138,7 +138,8 @@ class Muon : public Optimizer<DedupedPack> {
               const auto [rc_width, rc_height] = chunks(smaller, larger);
               const auto [og_width, og_height] = chunks(width, height);
 
-              pool_.run(
+              // TODO: ACTUALLY CHECK MAXIMIZE!!
+              this->pool_.run(
                 [&](int i) {
                   const auto [x_off, y_off] = offsets(i, og_width, og_height);
                   detail::fma_tile(
@@ -164,7 +165,7 @@ class Muon : public Optimizer<DedupedPack> {
                 )
               );
 
-              pool_.run(
+              this->pool_.run(
                 [&](int i) {
                   const auto [x_off, y_off] = offsets(i, og_width, og_height);
                   detail::normalize(
@@ -195,7 +196,7 @@ class Muon : public Optimizer<DedupedPack> {
 
               for (int iter = 0; iter < options_.newton_schulz_iters; ++iter) {
                 std::fill(step1_slice.begin(), step1_slice.end(), T(0));
-                pool_.run(
+                this->pool_.run(
                   [&](int i) {
                     const auto [sq_x_off, sq_y_off] = offsets(i, sq_width, sq_height);
 
@@ -215,7 +216,7 @@ class Muon : public Optimizer<DedupedPack> {
                 );
 
                 std::fill(step2_slice.begin(), step2_slice.end(), T(0));
-                pool_.run(
+                this->pool_.run(
                   [&](int i) {
                     const auto [sq_x_off, sq_y_off] = offsets(i, sq_width, sq_height);
 
@@ -235,7 +236,7 @@ class Muon : public Optimizer<DedupedPack> {
                 );
 
                 std::fill(step3_slice.begin(), step3_slice.end(), T(0));
-                pool_.run(
+                this->pool_.run(
                   [&](int i) {
                     const auto [rc_x_off, rc_y_off] = offsets(i, rc_width, rc_height);
 
@@ -269,7 +270,7 @@ class Muon : public Optimizer<DedupedPack> {
 
               auto update_slice = (width > height) ? og_buf_slice : tp_buf_slice;
 
-              pool_.run(
+              this->pool_.run(
                 [&](int i) {
                   const auto [x_off, y_off] = offsets(i, og_width, og_height);
                   if (options_.lambda) {

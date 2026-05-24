@@ -82,7 +82,7 @@ class Adam : public Optimizer<DedupedPack> {
 
               int chunk_size = (param.numel() + options_.num_proc - 1) / options_.num_proc;
 
-              pool_.run(
+              this->pool_.run(
                 [&](int i) {
                   int start = i * chunk_size;
                   int end = std::min(start + chunk_size, param.numel());

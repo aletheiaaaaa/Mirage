@@ -78,7 +78,7 @@ class Sarah : public Optimizer<DedupedPack> {
 
               int chunk_size = (param.numel() + options_.num_proc - 1) / options_.num_proc;
 
-              pool_.run(
+              this->pool_.run(
                 [&](int i) {
                   int start = i * chunk_size;
                   int end = std::min(start + chunk_size, param.numel());
@@ -96,17 +96,18 @@ class Sarah : public Optimizer<DedupedPack> {
                         eve::wide<T> prev_grad(&prev_grad_full[state_offset + j + offset]);
                         eve::wide<T> prev_update(&prev_update_full[state_offset + j + offset]);
 
-                        grad = eve::add(eve::sub(grad, prev_grad), prev_update);
+                        eve::wide<T> update = eve::add(eve::sub(grad, prev_grad), prev_update);
                         if (options_.lambda)
                           grad = eve::fnma(eve::wide<T>(options_.lambda), data, grad);
 
-                        return grad;
+                        return update;
                       }();
 
                       data = eve::fma(eve::wide<T>(options_.lr), update, data);
 
                       eve::store(data, &data_full[j + offset]);
                       eve::store(grad, &prev_grad_full[state_offset + j + offset]);
+                      eve::store(update, &prev_update_full[state_offset + j + offset]);
                     });
                   }
 

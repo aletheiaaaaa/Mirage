@@ -194,7 +194,7 @@ class Soap : public Optimizer<DedupedPack> {
               const auto [ww_width, ww_height] = chunks(width, width);
               const auto [hh_width, hh_height] = chunks(height, height);
 
-              pool_.run(
+              this->pool_.run(
                 [&](int i) {
                   const auto [wh_x_off, wh_y_off] = offsets(i, wh_width, wh_height);
                   const auto [ww_x_off, ww_y_off] = offsets(i, ww_width, ww_height);
@@ -293,7 +293,7 @@ class Soap : public Optimizer<DedupedPack> {
                 options_.num_proc
               );
 
-              pool_.run(
+              this->pool_.run(
                 [&](int i) {
                   const auto [x_off, y_off] = offsets(i, wh_width, wh_height);
 

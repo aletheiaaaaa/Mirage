@@ -173,6 +173,7 @@ class Parameter {
 
   int rank() const { return shape_.size(); }
   int numel() const { return data_.size(); }
+  T attenuation() const { return attenuation_; }
 
   template <typename S>
     requires detail::NestedSpan<S, T>
