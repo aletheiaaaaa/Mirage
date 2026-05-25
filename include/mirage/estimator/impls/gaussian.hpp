@@ -18,7 +18,7 @@ class Gaussian : public Estimator<DedupedPack> {
 
   bool needs_eval() override { return state_.needs_eval; }
 
-  void perturb() override { 
+  void perturb() override {
     // TODO: compute;
   }
 
