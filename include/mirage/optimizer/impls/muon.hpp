@@ -138,21 +138,31 @@ class Muon : public Optimizer<DedupedPack> {
               const auto [rc_width, rc_height] = chunks(smaller, larger);
               const auto [og_width, og_height] = chunks(width, height);
 
-              // TODO: ACTUALLY CHECK MAXIMIZE!!
               this->pool_.run(
                 [&](int i) {
                   const auto [x_off, y_off] = offsets(i, og_width, og_height);
-                  detail::fma_tile(
-                    std::span<const T>(grad_full),
-                    std::span<T>(og_mom_slice),
-                    width,
-                    height,
-                    std::min(og_width, width - x_off),
-                    std::min(og_height, height - y_off),
-                    x_off,
-                    y_off,
-                    options_.momentum
-                  );
+                  (options_.maximize) ? detail::fma_tile(
+                                          std::span<const T>(grad_full),
+                                          std::span<T>(og_mom_slice),
+                                          width,
+                                          height,
+                                          std::min(og_width, width - x_off),
+                                          std::min(og_height, height - y_off),
+                                          x_off,
+                                          y_off,
+                                          options_.momentum
+                                        )
+                                      : detail::fnma_tile(
+                                          std::span<const T>(grad_full),
+                                          std::span<T>(og_mom_slice),
+                                          width,
+                                          height,
+                                          std::min(og_width, width - x_off),
+                                          std::min(og_height, height - y_off),
+                                          x_off,
+                                          y_off,
+                                          options_.momentum
+                                        );
                 },
                 options_.num_proc
               );
@@ -263,7 +273,9 @@ class Muon : public Optimizer<DedupedPack> {
               }
 
               if (width > height) {
-                detail::transpose(std::span<const T>(og_buf_slice), std::span<T>(og_mom_slice), width, height);
+                detail::transpose(
+                  std::span<const T>(og_buf_slice), std::span<T>(og_mom_slice), width, height
+                );
               } else {
                 std::copy(og_buf_slice.begin(), og_buf_slice.end(), og_mom_slice.begin());
               }

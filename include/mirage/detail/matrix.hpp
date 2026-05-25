@@ -5,12 +5,15 @@
 #include <eve/arch/cpu/wide.hpp>
 #include <eve/conditional.hpp>
 #include <eve/module/core.hpp>
+#include <eve/module/core/regular/fnma.hpp>
 #include <vector>
 
 #include "utils.hpp"
 
 namespace mirage::detail {
 namespace matrix {
+enum class Variant : uint8_t { FMA = 0, FNMA, EMA, SQ_EMA };
+
 template <bool take_sign, typename T, typename F>
 inline void pair(
   std::span<const T> A,
@@ -53,14 +56,13 @@ inline void pair(
 
         unroll<y_height>([&]<int idx>() {
           int valid = std::min(vec_size, j_rem - idx * vec_size);
-          b_tile[idx] =
-            (idx * vec_size < j_rem)
-              ? eve::if_else(
-                  eve::keep_first(valid),
-                  eve::wide<T>(&B[k * N + y_off + j + idx * vec_size]),
-                  eve::zero
-                )
-              : eve::wide<T>(T(0));
+          b_tile[idx] = (idx * vec_size < j_rem)
+                          ? eve::if_else(
+                              eve::keep_first(valid),
+                              eve::wide<T>(&B[k * N + y_off + j + idx * vec_size]),
+                              eve::zero
+                            )
+                          : eve::wide<T>(T(0));
           if (take_sign) b_tile[idx] = eve::sign(b_tile[idx]);
         });
 
@@ -71,7 +73,6 @@ inline void pair(
         });
       }
 
-      // Single store per output element, with func applied in-register.
       unroll<arr_size>([&]<int idx>() {
         constexpr int row = idx % x_height;
         constexpr int col = idx / x_height;
@@ -86,7 +87,7 @@ inline void pair(
     }
   }
 }
-template <typename T, bool compute_ema, bool squared_fma>
+template <typename T, Variant var>
 inline void matrix_accum_internal(
   std::span<const T> X,
   std::span<T> Y,
@@ -131,9 +132,14 @@ inline void matrix_accum_internal(
           );
           eve::wide<T> mul(fma_mul);
 
-          if (squared_fma) data = eve::mul(data, data);
-          res = eve::fma(mul, res, data);
-          if (compute_ema) res = eve::fnma(mul, data, res);
+          res = [&]() {
+            if (var == Variant::FMA || var == Variant::FNMA)
+              return (var == Variant::FMA) ? eve::fma(mul, res, data) : eve::fnma(mul, res, data);
+
+            if (var == Variant::SQ_EMA) data = eve::mul(data, data);
+            res = eve::fma(mul, res, data);
+            return eve::fnma(mul, data, res);
+          }();
 
           eve::store[eve::keep_first(valid)](
             res, &Y[(x_off + i + row) * N + y_off + j + col * vec_size]
@@ -158,9 +164,9 @@ void pair_tile(
   int x_off,
   int y_off
 ) {
-  matrix::pair<false, T>(
-    A, B, out, M, K, N, x_chunk, y_chunk, x_off, y_off, [](auto& reg) { return reg; }
-  );
+  matrix::pair<false, T>(A, B, out, M, K, N, x_chunk, y_chunk, x_off, y_off, [](auto& reg) {
+    return reg;
+  });
 }
 
 template <typename T>
@@ -176,9 +182,9 @@ void sign_before_pair_tile(
   int x_off,
   int y_off
 ) {
-  matrix::pair<true, T>(
-    A, B, out, M, K, N, x_chunk, y_chunk, x_off, y_off, [](auto& reg) { return reg; }
-  );
+  matrix::pair<true, T>(A, B, out, M, K, N, x_chunk, y_chunk, x_off, y_off, [](auto& reg) {
+    return reg;
+  });
 }
 
 template <typename T>
@@ -195,10 +201,9 @@ void sign_after_pair_tile(
   int y_off,
   bool maximize
 ) {
-  matrix::pair<false, T>(
-    A, B, out, M, K, N, x_chunk, y_chunk, x_off, y_off,
-    [&](auto& reg) { return ((maximize) ? 1 : -1) * eve::sign(reg); }
-  );
+  matrix::pair<false, T>(A, B, out, M, K, N, x_chunk, y_chunk, x_off, y_off, [&](auto& reg) {
+    return ((maximize) ? 1 : -1) * eve::sign(reg);
+  });
 }
 
 template <typename T>
@@ -214,15 +219,12 @@ void norm_pair_tile(
   int x_off,
   int y_off
 ) {
-  matrix::pair<false, T>(
-    A, B, out, M, K, N, x_chunk, y_chunk, x_off, y_off,
-    [&](auto& reg) {
-      eve::wide<T> m_reg(M);
-      eve::wide<T> n_reg(N);
-      eve::wide<T> twos(T(2));
-      return reg * twos / (m_reg + n_reg);
-    }
-  );
+  matrix::pair<false, T>(A, B, out, M, K, N, x_chunk, y_chunk, x_off, y_off, [&](auto& reg) {
+    eve::wide<T> m_reg(M);
+    eve::wide<T> n_reg(N);
+    eve::wide<T> twos(T(2));
+    return reg * twos / (m_reg + n_reg);
+  });
 }
 
 namespace matrix {
@@ -530,7 +532,24 @@ void fma_tile(
   int y_off,
   float fma_mul
 ) {
-  matrix::matrix_accum_internal<T, false, false>(
+  matrix::matrix_accum_internal<T, matrix::Variant::FMA>(
+    X, Y, M, N, x_chunk, y_chunk, x_off, y_off, fma_mul
+  );
+}
+
+template <typename T>
+void fnma_tile(
+  std::span<const T> X,
+  std::span<T> Y,
+  int M,
+  int N,
+  int x_chunk,
+  int y_chunk,
+  int x_off,
+  int y_off,
+  float fma_mul
+) {
+  matrix::matrix_accum_internal<T, matrix::Variant::FNMA>(
     X, Y, M, N, x_chunk, y_chunk, x_off, y_off, fma_mul
   );
 }
@@ -547,7 +566,7 @@ void ema_tile(
   int y_off,
   float ema_rate
 ) {
-  matrix::matrix_accum_internal<T, true, false>(
+  matrix::matrix_accum_internal<T, matrix::Variant::EMA>(
     X, E, M, N, x_chunk, y_chunk, x_off, y_off, ema_rate
   );
 }
@@ -564,21 +583,14 @@ void squared_ema_tile(
   int y_off,
   float ema_rate
 ) {
-  matrix::matrix_accum_internal<T, true, true>(
+  matrix::matrix_accum_internal<T, matrix::Variant::SQ_EMA>(
     X, E, M, N, x_chunk, y_chunk, x_off, y_off, ema_rate
   );
 }
 
 template <typename T>
 void normalize(
-  std::span<T> X,
-  float norm,
-  int M,
-  int N,
-  int x_chunk,
-  int y_chunk,
-  int x_off,
-  int y_off
+  std::span<T> X, float norm, int M, int N, int x_chunk, int y_chunk, int x_off, int y_off
 ) {
   constexpr int x_height = UNROLL_FACTOR;
   constexpr int y_height = std::max(1, UNROLL_FACTOR / 2);
