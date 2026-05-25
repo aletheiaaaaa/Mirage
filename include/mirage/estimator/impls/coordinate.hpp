@@ -9,9 +9,9 @@ template <typename DedupedPack>
   requires detail::NonConstPack<DedupedPack>
 class Coordinate : public Estimator<DedupedPack> {
   public:
-  explicit Coordinate(ParameterPack<DedupedPack> parameters, int num_evals, float epsilon = 1e-3f)
+  explicit Coordinate(ParameterPack<DedupedPack> parameters, int num_evals = 1, float norm = 1e-3f)
     : Estimator<DedupedPack>(parameters, num_evals) {
-    state_.norm = epsilon;
+    state_.norm = norm;
     this->init(state_);
     state_.needs_eval = true;
   }

@@ -26,12 +26,6 @@
 
 namespace mirage {
 namespace detail {
-struct ViewParams {
-  int offset;
-  std::vector<int> shape;
-  std::vector<int> strides;
-};
-
 inline std::vector<int> compute_view_idx(
   int offset, std::span<const int> shape, std::span<const int> strides
 ) {
