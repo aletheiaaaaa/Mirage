@@ -32,14 +32,16 @@ class Estimator {
     int i = 0;
     std::apply(
       [&](auto&... param_vecs) {
-        ([&](auto& param_vec) {
-          for (auto& param_ref : param_vec) {
-            auto& param = param_ref.get();
-            using T = typename std::remove_cvref_t<decltype(param)>::DataType;
-            for (int j = 0; j < param.numel(); ++j, ++i)
-              param.grad()[j] = static_cast<T>(state_.grad[i]) * param.attenuation();
-          }
-        }(param_vecs), ...);
+        (
+          [&](auto& param_vec) {
+            for (auto& param_ref : param_vec) {
+              auto& param = param_ref.get();
+              using T = typename std::remove_cvref_t<decltype(param)>::DataType;
+              for (int j = 0; j < param.numel(); ++j, ++i)
+                param.grad()[j] = static_cast<T>(state_.grad[i]) * param.attenuation();
+            }
+          }(param_vecs),
+          ...);
       },
       parameters_.data
     );
@@ -121,20 +123,22 @@ class Estimator {
 
     std::apply(
       [&](auto&... param_vecs) {
-        ([&](auto& param_vec) {
-          if (found) return;
-          for (auto& param_ref : param_vec) {
+        (
+          [&](auto& param_vec) {
             if (found) return;
-            auto& param = param_ref.get();
-            int n = param.numel();
-            if (remaining < n) {
-              param.data()[remaining] += delta;
-              found = true;
-              return;
+            for (auto& param_ref : param_vec) {
+              if (found) return;
+              auto& param = param_ref.get();
+              int n = param.numel();
+              if (remaining < n) {
+                param.data()[remaining] += delta;
+                found = true;
+                return;
+              }
+              remaining -= n;
             }
-            remaining -= n;
-          }
-        }(param_vecs), ...);
+          }(param_vecs),
+          ...);
       },
       parameters_.data
     );
@@ -144,17 +148,17 @@ class Estimator {
     int i = 0;
     std::apply(
       [&](auto&... param_vecs) {
-        ([&](auto& param_vec) {
-          for (auto& param_ref : param_vec) {
-            auto& param = param_ref.get();
-            for (int j = 0; j < param.numel(); ++j, ++i)
-              param.data()[j] += deltas[i];
-          }
-        }(param_vecs), ...);
+        (
+          [&](auto& param_vec) {
+            for (auto& param_ref : param_vec) {
+              auto& param = param_ref.get();
+              for (int j = 0; j < param.numel(); ++j, ++i) param.data()[j] += deltas[i];
+            }
+          }(param_vecs),
+          ...);
       },
       parameters_.data
     );
   }
-
 };
 }  // namespace mirage::estim
