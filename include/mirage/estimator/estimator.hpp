@@ -117,6 +117,7 @@ class Estimator {
     );
   }
 
+  // TODO: support doubles;
   void apply(int coord, float delta) {
     int remaining = coord;
     bool found = false;
