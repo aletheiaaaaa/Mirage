@@ -101,7 +101,8 @@ std::pair<eve::wide<Real>, eve::wide<Real>> random_gaussian(
 template <typename Real>
 void normalize(std::vector<Real>& vec, Real eps) {
   Real norm = std::sqrt(std::inner_product(vec.begin(), vec.end(), vec.begin(), Real(0.0)));
+  Real inv = 1 / (norm + Real(1e-8));
 
-  for (auto& x : vec) x /= (norm + Real(1e-8));
+  for (auto& x : vec) x *= inv;
 }
 }  // namespace mirage::detail

@@ -91,7 +91,7 @@ class Parameter {
   template <typename S>
     requires detail::NestedSpan<S, T>
   explicit Parameter(const S& span, T attenuation = static_cast<T>(1.0))
-    : attenuation_(attenuation) {
+    : smoothing_(attenuation) {
     detail::unpack(span, shape_, data_, strides_);
     grad_.resize(data_.size());
   }
@@ -167,7 +167,7 @@ class Parameter {
 
   int rank() const { return shape_.size(); }
   int numel() const { return data_.size(); }
-  T attenuation() const { return attenuation_; }
+  T smoothing() const { return smoothing_; }
 
   template <typename S>
     requires detail::NestedSpan<S, T>
@@ -254,10 +254,10 @@ class Parameter {
   std::vector<int> strides_;
   std::vector<T> data_;
   std::vector<T> grad_;
-  T attenuation_;
+  T smoothing_;
 
   explicit Parameter(const std::vector<int>& shape, T attentuation = 1.0)
-    : shape_(std::move(shape)), attenuation_(attentuation) {
+    : shape_(std::move(shape)), smoothing_(attentuation) {
     strides_.resize(shape_.size());
     std::exclusive_scan(
       shape_.rbegin(), shape_.rend(), strides_.rbegin(), int{1}, std::multiplies<int>{}

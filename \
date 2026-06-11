@@ -61,5 +61,37 @@ class Estimator {
   int num_evals_;
   EstimatorState<DedupedPack> state_;
   int current_ = 0;
+
+  void init(EstimatorState<DedupedPack>& s) {
+    int64_t bytes = 0;
+    std::apply(
+      [&](auto&... param_vecs) {
+        (
+          [&](auto& param_vec) {
+            using ParamType =
+              typename std::remove_cvref_t<decltype(param_vec)>::value_type::type::DataType;
+
+            for (auto& param_ref : param_vec) {
+              auto& param = param_ref.get();
+              bytes += sizeof(ParamType) * 2 * param.numel();
+              s.total += param.numel();
+            }
+          }(param_vecs),
+          ...);
+      },
+      parameters_.data
+    );
+
+    bytes /= (1024 * 1024);
+    const char* max = std::getenv("MIRAGE_ESTIMATOR_MEMMAX");
+    int max_bytes = (max == nullptr) ? 256 : std::stoi(max);
+    if (bytes > max_bytes)
+      throw std::runtime_error(
+        "Out of memory, tried to allocate " + std::to_string(bytes) + " MiB out of a max of " +
+        std::to_string(max_bytes) +
+        " MiB. You can increase this using the \"MIRAGE_ESTIMATOR_MEMMAX\" environment "
+        "variable."
+      );
+  }
 };
 }  // namespace mirage::estim

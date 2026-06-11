@@ -9,19 +9,16 @@ template <typename DedupedPack>
   requires detail::NonConstPack<DedupedPack>
 class Coordinate : public Estimator<DedupedPack> {
   public:
-  explicit Coordinate(ParameterPack<DedupedPack> parameters, int num_evals = 1, float norm = 1e-3f)
+  explicit Coordinate(ParameterPack<DedupedPack> parameters, int num_evals = 1, double norm = 1e-3f)
     : Estimator<DedupedPack>(parameters, num_evals) {
     state_.norm = norm;
-    this->init(state_);
     state_.needs_eval = true;
   }
 
-  bool needs_eval() override { return state_.needs_eval; }
-
-  void perturb() override { this->apply(current_, state_.is_pos ? state_.norm : -state_.norm); }
+  void perturb() override { apply(current_, state_.is_pos ? state_.norm : -state_.norm); }
 
   void observe(float loss) override {
-    this->apply(current_, state_.is_pos ? -state_.norm : state_.norm);
+    apply(current_, state_.is_pos ? -state_.norm : state_.norm);
 
     if (state_.is_pos) {
       state_.pos_mean += (loss - state_.pos_mean) / ++state_.pairs_so_far;
@@ -30,7 +27,7 @@ class Coordinate : public Estimator<DedupedPack> {
       state_.neg_mean += (loss - state_.neg_mean) / state_.pairs_so_far;
       state_.is_pos = true;
 
-      state_.grad[current_] = (state_.pos_mean - state_.neg_mean) / (2.0f * state_.norm);
+      write_grad(current_, (state_.pos_mean - state_.neg_mean) / (2.0f * state_.norm));
 
       if (state_.pairs_so_far == this->num_evals_) {
         ++current_;
@@ -44,9 +41,6 @@ class Coordinate : public Estimator<DedupedPack> {
   }
 
   void finalize() override {
-    this->write(state_.grad);
-    std::fill(state_.grad.begin(), state_.grad.end(), 0.0f);
-
     current_ = 0;
     state_.is_pos = true;
     state_.pairs_so_far = 0;
@@ -58,5 +52,66 @@ class Coordinate : public Estimator<DedupedPack> {
   private:
   EstimatorState<DedupedPack> state_;
   int current_ = 0;
+
+  void apply(int coord, double delta) {
+    int remaining = coord;
+    bool found = false;
+
+    std::apply(
+      [&](auto&... param_vecs) {
+        (
+          [&](auto& param_vec) {
+            using T = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type::DataType;
+
+            if (found) return;
+            for (auto& param_ref : param_vec) {
+              if (found) return;
+              auto& param = param_ref.get();
+              int n = param.numel();
+              if (remaining < n) {
+                param.data()[remaining] += T(delta);
+                found = true;
+                return;
+              }
+              remaining -= n;
+            }
+          }(param_vecs),
+          ...);
+      },
+      this->parameters_.data
+    );
+  }
+
+  void write_grad(int coord, double grad) {
+    int remaining = coord;
+    bool found = false;
+
+    std::apply(
+      [&](auto&... param_vecs) {
+        (
+          [&](auto& param_vec) {
+            using T = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type::DataType;
+
+            if (found) return;
+            for (auto& param_ref : param_vec) {
+              if (found) return;
+
+              auto& param = param_ref.get();
+              int n = param.numel();
+              T smoothing = param.smoothing();
+
+              if (remaining < n) {
+                param.grad()[remaining] = smoothing * T(grad);
+                found = true;
+                return;
+              }
+              remaining -= n;
+            }
+          }(param_vecs),
+          ...);
+      },
+      this->parameters_.data
+    );
+  }
 };
 }  // namespace mirage::estim
