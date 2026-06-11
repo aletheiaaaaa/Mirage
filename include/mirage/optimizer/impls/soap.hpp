@@ -31,19 +31,19 @@ struct SoapOptions {
 
 template <typename TypeTuple>
 struct SoapState : public OptimizerState {
-  detail::ExtractedVector<TypeTuple> momentum{};
-  detail::ExtractedVector<TypeTuple> velocity{};
-  detail::ExtractedVector<TypeTuple> left_velocity{};
-  detail::ExtractedVector<TypeTuple> right_velocity{};
-  detail::ExtractedVector<TypeTuple> left_eigenvectors{};
-  detail::ExtractedVector<TypeTuple> right_eigenvectors{};
+  detail::StateTuple<TypeTuple> momentum{};
+  detail::StateTuple<TypeTuple> velocity{};
+  detail::StateTuple<TypeTuple> left_velocity{};
+  detail::StateTuple<TypeTuple> right_velocity{};
+  detail::StateTuple<TypeTuple> left_eigenvectors{};
+  detail::StateTuple<TypeTuple> right_eigenvectors{};
 
-  detail::ExtractedVector<TypeTuple> rotated{};
-  detail::ExtractedVector<TypeTuple> update{};
-  detail::ExtractedVector<TypeTuple> leig_tp{};
-  detail::ExtractedVector<TypeTuple> reig_tp{};
-  detail::ExtractedVector<TypeTuple> tp_grad{};
-  detail::ExtractedVector<TypeTuple> scratch{};
+  detail::StateTuple<TypeTuple> rotated{};
+  detail::StateTuple<TypeTuple> update{};
+  detail::StateTuple<TypeTuple> leig_tp{};
+  detail::StateTuple<TypeTuple> reig_tp{};
+  detail::StateTuple<TypeTuple> tp_grad{};
+  detail::StateTuple<TypeTuple> scratch{};
 };
 
 template <typename DedupedPack>
@@ -64,18 +64,18 @@ class Soap : public Optimizer<DedupedPack> {
             using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
             using T = typename ParamType::DataType;
 
-            auto& mom = std::get<detail::ExtractType_t<ParamType>>(state_.momentum);
-            auto& vel = std::get<detail::ExtractType_t<ParamType>>(state_.velocity);
-            auto& lvel = std::get<detail::ExtractType_t<ParamType>>(state_.left_velocity);
-            auto& rvel = std::get<detail::ExtractType_t<ParamType>>(state_.right_velocity);
-            auto& leig = std::get<detail::ExtractType_t<ParamType>>(state_.left_eigenvectors);
-            auto& reig = std::get<detail::ExtractType_t<ParamType>>(state_.right_eigenvectors);
-            auto& rot = std::get<detail::ExtractType_t<ParamType>>(state_.rotated);
-            auto& upd = std::get<detail::ExtractType_t<ParamType>>(state_.update);
-            auto& leig_tp = std::get<detail::ExtractType_t<ParamType>>(state_.leig_tp);
-            auto& reig_tp = std::get<detail::ExtractType_t<ParamType>>(state_.reig_tp);
-            auto& tpg = std::get<detail::ExtractType_t<ParamType>>(state_.tp_grad);
-            auto& scratch = std::get<detail::ExtractType_t<ParamType>>(state_.scratch);
+            auto& mom = std::get<std::vector<T>>(state_.momentum);
+            auto& vel = std::get<std::vector<T>>(state_.velocity);
+            auto& lvel = std::get<std::vector<T>>(state_.left_velocity);
+            auto& rvel = std::get<std::vector<T>>(state_.right_velocity);
+            auto& leig = std::get<std::vector<T>>(state_.left_eigenvectors);
+            auto& reig = std::get<std::vector<T>>(state_.right_eigenvectors);
+            auto& rot = std::get<std::vector<T>>(state_.rotated);
+            auto& upd = std::get<std::vector<T>>(state_.update);
+            auto& leig_tp = std::get<std::vector<T>>(state_.leig_tp);
+            auto& reig_tp = std::get<std::vector<T>>(state_.reig_tp);
+            auto& tpg = std::get<std::vector<T>>(state_.tp_grad);
+            auto& scratch = std::get<std::vector<T>>(state_.scratch);
 
             for (auto& param_ref : param_vec) {
               auto& param = param_ref.get();
@@ -106,6 +106,9 @@ class Soap : public Optimizer<DedupedPack> {
   }
 
   void step() override {
+    std::array<int, detail::num_dtypes<DedupedPack>> state_offsets{};
+    std::array<int, detail::num_dtypes<DedupedPack>> left_offsets{};
+    std::array<int, detail::num_dtypes<DedupedPack>> right_offsets{};
     std::apply(
       [&](auto&... param_vecs) {
         (
@@ -113,22 +116,23 @@ class Soap : public Optimizer<DedupedPack> {
             using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
             using T = typename ParamType::DataType;
 
-            auto& mom_full = std::get<detail::ExtractType_t<ParamType>>(state_.momentum);
-            auto& vel_full = std::get<detail::ExtractType_t<ParamType>>(state_.velocity);
-            auto& lvel_full = std::get<detail::ExtractType_t<ParamType>>(state_.left_velocity);
-            auto& rvel_full = std::get<detail::ExtractType_t<ParamType>>(state_.right_velocity);
-            auto& leig_full = std::get<detail::ExtractType_t<ParamType>>(state_.left_eigenvectors);
-            auto& reig_full = std::get<detail::ExtractType_t<ParamType>>(state_.right_eigenvectors);
-            auto& rot_full = std::get<detail::ExtractType_t<ParamType>>(state_.rotated);
-            auto& upd_full = std::get<detail::ExtractType_t<ParamType>>(state_.update);
-            auto& leig_tp_full = std::get<detail::ExtractType_t<ParamType>>(state_.leig_tp);
-            auto& reig_tp_full = std::get<detail::ExtractType_t<ParamType>>(state_.reig_tp);
-            auto& tpg_full = std::get<detail::ExtractType_t<ParamType>>(state_.tp_grad);
-            auto& scratch_full = std::get<detail::ExtractType_t<ParamType>>(state_.scratch);
+            auto& mom_full = std::get<std::vector<T>>(state_.momentum);
+            auto& vel_full = std::get<std::vector<T>>(state_.velocity);
+            auto& lvel_full = std::get<std::vector<T>>(state_.left_velocity);
+            auto& rvel_full = std::get<std::vector<T>>(state_.right_velocity);
+            auto& leig_full = std::get<std::vector<T>>(state_.left_eigenvectors);
+            auto& reig_full = std::get<std::vector<T>>(state_.right_eigenvectors);
+            auto& rot_full = std::get<std::vector<T>>(state_.rotated);
+            auto& upd_full = std::get<std::vector<T>>(state_.update);
+            auto& leig_tp_full = std::get<std::vector<T>>(state_.leig_tp);
+            auto& reig_tp_full = std::get<std::vector<T>>(state_.reig_tp);
+            auto& tpg_full = std::get<std::vector<T>>(state_.tp_grad);
+            auto& scratch_full = std::get<std::vector<T>>(state_.scratch);
 
-            int state_offset = 0;
-            int left_offset = 0;
-            int right_offset = 0;
+            constexpr std::size_t di = detail::dtype_index<T, DedupedPack>;
+            int& state_offset = state_offsets[di];
+            int& left_offset = left_offsets[di];
+            int& right_offset = right_offsets[di];
 
             for (auto param_ref : param_vec) {
               auto& param_og = param_ref.get();

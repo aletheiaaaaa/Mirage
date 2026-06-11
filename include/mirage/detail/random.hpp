@@ -53,11 +53,12 @@ kumi::tuple<WideF, WideF> boxmuller_wide(WideU i1, WideU i2) {
   auto [s, c] = eve::sincos(theta);
   return {r * c, r * s};
 }
+}  // namespace random
 
 template <typename Real>
 class Generator {
   public:
-  using RNG = philox_for_t<Real>;
+  using RNG = random::philox_for_t<Real>;
   using word = RNG::ctr_type::value_type;
   using four_u = eve::wide<word, eve::fixed<4>>;
   using four_f = eve::wide<Real, eve::fixed<4>>;
@@ -87,16 +88,6 @@ class Generator {
   uint64_t counter_ = 0;
   uint64_t seed_;
 };
-}  // namespace random
-
-template <typename Real>
-std::pair<eve::wide<Real>, eve::wide<Real>> random_gaussian(
-  size_t n, uint64_t seed, uint64_t stream_id
-) {
-  random::Generator<Real> gen(seed, stream_id);
-
-  return gen.generate();
-}
 
 template <typename Real>
 void normalize(std::vector<Real>& vec, Real eps) {

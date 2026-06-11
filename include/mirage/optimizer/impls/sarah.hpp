@@ -24,8 +24,8 @@ struct SarahOptions {
 
 template <typename TypeTuple>
 struct SarahState : public OptimizerState {
-  detail::ExtractedVector<TypeTuple> prev_grad{};
-  detail::ExtractedVector<TypeTuple> prev_update{};
+  detail::StateTuple<TypeTuple> prev_grad{};
+  detail::StateTuple<TypeTuple> prev_update{};
 };
 
 template <typename DedupedPack>
@@ -41,11 +41,11 @@ class Sarah : public Optimizer<DedupedPack> {
         (
           [&](auto& param_vec) {
             using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
-            auto& prev_grad = std::get<detail::ExtractType_t<ParamType>>(state_.prev_grad);
-            auto& prev_update = std::get<detail::ExtractType_t<ParamType>>(state_.prev_update);
+            using T = typename ParamType::DataType;
+            auto& prev_grad = std::get<std::vector<T>>(state_.prev_grad);
+            auto& prev_update = std::get<std::vector<T>>(state_.prev_update);
             for (auto& param_ref : param_vec) {
               auto& param = param_ref.get();
-              using T = typename ParamType::DataType;
               prev_grad.insert(prev_grad.end(), param.numel(), T(0));
               prev_update.insert(prev_update.end(), param.numel(), T(0));
             }
@@ -57,18 +57,19 @@ class Sarah : public Optimizer<DedupedPack> {
   }
 
   void step() override {
+    std::array<int, detail::num_dtypes<DedupedPack>> state_offsets{};
     std::apply(
       [&](auto&... param_vecs) {
         (
           [&](auto& param_vec) {
             using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
-            auto& prev_grad_full = std::get<detail::ExtractType_t<ParamType>>(state_.prev_grad);
-            auto& prev_update_full = std::get<detail::ExtractType_t<ParamType>>(state_.prev_update);
+            using T = typename ParamType::DataType;
+            auto& prev_grad_full = std::get<std::vector<T>>(state_.prev_grad);
+            auto& prev_update_full = std::get<std::vector<T>>(state_.prev_update);
+            int& state_offset = state_offsets[detail::dtype_index<T, DedupedPack>];
 
-            int state_offset = 0;
             for (auto param_ref : param_vec) {
               auto& param = param_ref.get();
-              using T = typename ParamType::DataType;
 
               auto& grad_full = param.grad();
               auto& data_full = param.data();

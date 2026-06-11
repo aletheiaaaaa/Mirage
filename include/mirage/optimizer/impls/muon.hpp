@@ -31,12 +31,12 @@ struct MuonOptions {
 
 template <typename TypeTuple>
 struct MuonState : public OptimizerState {
-  detail::ExtractedVector<TypeTuple> momentum{};
-  detail::ExtractedVector<TypeTuple> og_buf{};
-  detail::ExtractedVector<TypeTuple> tp_buf{};
-  detail::ExtractedVector<TypeTuple> step1_buf{};
-  detail::ExtractedVector<TypeTuple> step2_buf{};
-  detail::ExtractedVector<TypeTuple> step3_buf{};
+  detail::StateTuple<TypeTuple> momentum{};
+  detail::StateTuple<TypeTuple> og_buf{};
+  detail::StateTuple<TypeTuple> tp_buf{};
+  detail::StateTuple<TypeTuple> step1_buf{};
+  detail::StateTuple<TypeTuple> step2_buf{};
+  detail::StateTuple<TypeTuple> step3_buf{};
 };
 
 template <typename DedupedPack>
@@ -55,15 +55,15 @@ class Muon : public Optimizer<DedupedPack> {
         (
           [&](auto& param_vec) {
             using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
-            auto& mom = std::get<detail::ExtractType_t<ParamType>>(state_.momentum);
-            auto& og_buf = std::get<detail::ExtractType_t<ParamType>>(state_.og_buf);
-            auto& tp_buf = std::get<detail::ExtractType_t<ParamType>>(state_.tp_buf);
-            auto& step1_buf = std::get<detail::ExtractType_t<ParamType>>(state_.step1_buf);
-            auto& step2_buf = std::get<detail::ExtractType_t<ParamType>>(state_.step2_buf);
-            auto& step3_buf = std::get<detail::ExtractType_t<ParamType>>(state_.step3_buf);
+            using T = typename ParamType::DataType;
+            auto& mom = std::get<std::vector<T>>(state_.momentum);
+            auto& og_buf = std::get<std::vector<T>>(state_.og_buf);
+            auto& tp_buf = std::get<std::vector<T>>(state_.tp_buf);
+            auto& step1_buf = std::get<std::vector<T>>(state_.step1_buf);
+            auto& step2_buf = std::get<std::vector<T>>(state_.step2_buf);
+            auto& step3_buf = std::get<std::vector<T>>(state_.step3_buf);
             for (auto& param_ref : param_vec) {
               auto& param = param_ref.get();
-              using T = typename ParamType::DataType;
               int s = std::min(param.size(0), param.strides(0));
               mom.insert(mom.end(), param.numel(), T(0));
               og_buf.insert(og_buf.end(), param.numel(), T(0));
@@ -80,23 +80,25 @@ class Muon : public Optimizer<DedupedPack> {
   }
 
   void step() override {
+    std::array<int, detail::num_dtypes<DedupedPack>> state_offsets{};
+    std::array<int, detail::num_dtypes<DedupedPack>> sq_offsets{};
     std::apply(
       [&](auto&... param_vecs) {
         (
           [&](auto& param_vec) {
             using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
-            auto& mom_full = std::get<detail::ExtractType_t<ParamType>>(state_.momentum);
-            auto& og_full = std::get<detail::ExtractType_t<ParamType>>(state_.og_buf);
-            auto& tp_full = std::get<detail::ExtractType_t<ParamType>>(state_.tp_buf);
-            auto& step1_full = std::get<detail::ExtractType_t<ParamType>>(state_.step1_buf);
-            auto& step2_full = std::get<detail::ExtractType_t<ParamType>>(state_.step2_buf);
-            auto& step3_full = std::get<detail::ExtractType_t<ParamType>>(state_.step3_buf);
+            using T = typename ParamType::DataType;
+            auto& mom_full = std::get<std::vector<T>>(state_.momentum);
+            auto& og_full = std::get<std::vector<T>>(state_.og_buf);
+            auto& tp_full = std::get<std::vector<T>>(state_.tp_buf);
+            auto& step1_full = std::get<std::vector<T>>(state_.step1_buf);
+            auto& step2_full = std::get<std::vector<T>>(state_.step2_buf);
+            auto& step3_full = std::get<std::vector<T>>(state_.step3_buf);
+            int& state_offset = state_offsets[detail::dtype_index<T, DedupedPack>];
+            int& sq_offset = sq_offsets[detail::dtype_index<T, DedupedPack>];
 
-            int state_offset = 0;
-            int sq_offset = 0;
             for (auto& param_ref : param_vec) {
               auto& param = param_ref.get();
-              using T = typename ParamType::DataType;
               int width = param.size(0);
               int height = param.strides(0);
               int numel = param.numel();

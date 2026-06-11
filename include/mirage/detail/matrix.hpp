@@ -25,7 +25,12 @@ struct Dims {
 
 template <typename T>
 inline eve::wide<T> mload(const T* ptr, int valid) {
-  return eve::if_else(eve::keep_first(valid), eve::wide<T>(ptr), eve::zero);
+  constexpr int width = eve::wide<T>::size();
+  if (valid >= width) return eve::wide<T>(ptr);
+
+  alignas(eve::wide<T>) T buf[width] = {};
+  for (int k = 0; k < valid; ++k) buf[k] = ptr[k];
+  return eve::wide<T>(&buf[0]);
 }
 
 template <typename T, typename F>
@@ -463,10 +468,10 @@ void transpose(std::span<const T> X, std::span<T> out, int M, int N) {
   std::for_each(indices.begin(), indices.end(), [&](auto& val) {
     auto i = &val - indices.data();
 
-    int row = i % N;
-    int col = i / N;
+    int out_row = i / M;
+    int out_col = i % M;
 
-    val = M * col + row;
+    val = out_col * N + out_row;
   });
 
   collect(std::span<const T>(X), std::span<T>(out), std::span<const int>(indices), M * N);

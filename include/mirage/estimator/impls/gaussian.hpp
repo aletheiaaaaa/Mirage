@@ -2,6 +2,7 @@
 
 #include <tuple>
 
+#include "../../detail/thread.hpp"
 #include "../../parameter.hpp"
 #include "../estimator.hpp"
 
@@ -11,8 +12,10 @@ template <typename DedupedPack>
   requires detail::NonConstPack<DedupedPack>
 class Gaussian : public Estimator<DedupedPack> {
   public:
-  explicit Gaussian(ParameterPack<DedupedPack> parameters, int num_evals = 8, double norm = 1e-3f)
-    : Estimator<DedupedPack>(parameters, num_evals) {
+  explicit Gaussian(
+    ParameterPack<DedupedPack> parameters, int num_evals = 8, double norm = 1e-3f, int num_proc = 4
+  )
+    : Estimator<DedupedPack>(parameters, num_evals), num_proc_(num_proc), pool_(num_proc) {
     state_.norm = norm;
     state_.needs_eval = true;
   }
@@ -51,9 +54,11 @@ class Gaussian : public Estimator<DedupedPack> {
 
   private:
   EstimatorState<DedupedPack> state_;
-  detail::ExtractedVector<DedupedPack> perturbation_;
+  detail::ThreadPool pool_;
+  detail::StateTuple<DedupedPack> generators_;
+  int num_proc_;
 
-  void apply(int seed, double delta, bool reset) {
+  void apply(uint64_t seed, double delta, bool reset) {
     std::apply(
       [&](auto&... param_vecs) {
         (
@@ -62,9 +67,32 @@ class Gaussian : public Estimator<DedupedPack> {
 
             for (auto& param_ref : param_vec) {
               auto& param = param_ref.get();
+              auto& grad_full = param.grad();
               int n = param.numel();
 
-              // TODO: write the loop
+              constexpr int vec_size = eve::wide<T>::size();
+              constexpr int unroll_factor = detail::UNROLL_FACTOR / 2;
+
+              int chunk_size = (param.numel() + num_proc_ - 1) / num_proc_;
+
+              pool_.run(
+                [&](int i) {
+                  int start = i * chunk_size;
+                  int end = std::min(start + chunk_size, param.numel());
+
+                  for (int j = start; j < end; j += vec_size * unroll_factor) {
+                    detail::unroll<unroll_factor>([&]<int index>() {
+                      constexpr int offset = 2 * index * vec_size;
+
+                      eve::wide<T> grad1(&grad_full[j + offset]);
+                      eve::wide<T> grad2(&grad_full[j + offset + vec_size]);
+
+                      auto [rand1, rand2] = detail::random_gaussian<T>(seed, i);
+                    });
+                  }
+                },
+                num_proc_
+              );
             }
           }(param_vecs),
           ...);

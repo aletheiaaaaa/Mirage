@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cereal/archives/binary.hpp>
 #include <cereal/types/string.hpp>
@@ -90,8 +91,7 @@ class Parameter {
 
   template <typename S>
     requires detail::NestedSpan<S, T>
-  explicit Parameter(const S& span, T attenuation = static_cast<T>(1.0))
-    : smoothing_(attenuation) {
+  explicit Parameter(const S& span, T attenuation = static_cast<T>(1.0)) : smoothing_(attenuation) {
     detail::unpack(span, shape_, data_, strides_);
     grad_.resize(data_.size());
   }
@@ -518,7 +518,7 @@ struct ParameterPack {
   }
 };
 template <typename... Ts>
-ParameterPack(Ts&...) -> ParameterPack<detail::DeduplicatedPack_t<std::decay_t<Ts>...>>;
+ParameterPack(Ts&...) -> ParameterPack<detail::DeduplicatedPack_t<std::remove_cvref_t<Ts>...>>;
 
 namespace detail {
 template <typename T>
@@ -529,42 +529,48 @@ concept NonConstPack = []<typename... Ts>(std::tuple<Ts...>*) {
   return ((!std::is_const_v<Ts> && ParamLike<Ts>) && ...);
 }(static_cast<T*>(nullptr));
 
-template <typename T, typename TypeTuple>
-struct TaggedVector : private std::vector<T> {
-  using std::vector<T>::vector;
-  using std::vector<T>::operator=;
-  using std::vector<T>::operator[];
-  using std::vector<T>::data;
-  using std::vector<T>::begin;
-  using std::vector<T>::end;
-  using std::vector<T>::insert;
-
-  TaggedVector(std::vector<T>&& v) : std::vector<T>(std::move(v)) {}
-  TaggedVector(const std::vector<T>& v) : std::vector<T>(v) {}
-
-  template <class Archive>
-  void save(Archive& ar) const {
-    ar(static_cast<const std::vector<T>&>(*this));
-  }
-
-  template <class Archive>
-  void load(Archive& ar) {
-    ar(static_cast<std::vector<T>&>(*this));
-  }
+// Index of the first occurrence of T among a std::tuple's element types.
+template <typename T, typename Tuple>
+struct TypeIndex;
+template <typename T, typename... Rest>
+struct TypeIndex<T, std::tuple<T, Rest...>> {
+  static constexpr std::size_t value = 0;
+};
+template <typename T, typename U, typename... Rest>
+struct TypeIndex<T, std::tuple<U, Rest...>> {
+  static constexpr std::size_t value = 1 + TypeIndex<T, std::tuple<Rest...>>::value;
 };
 
 template <typename T>
-struct ExtractType {};
+using StateVector = std::vector<T>;
+
 template <typename T>
-struct ExtractType<Parameter<T>> {
-  using Type = TaggedVector<T, std::tuple<T>>;
-};
-template <typename Q, typename T>
-struct ExtractType<Quantized<Q, T>> {
-  using Type = TaggedVector<T, std::tuple<Q, T>>;
+  requires ParamLike<T>
+struct ExtractType {
+  using Type = T::DataType;
 };
 template <typename T>
+  requires ParamLike<T>
 using ExtractType_t = typename ExtractType<T>::Type;
+
+// The unique DataTypes spanned by a deduplicated parameter pack, e.g.
+// std::tuple<Parameter<float>, Quantized<int8_t, float>> -> std::tuple<float>.
+template <typename DedupedPack>
+using DtypeTuple =
+  ApplyPackTraitWithTuple_t<DeduplicatedPack_t, TransformTuple_t<ExtractType_t, DedupedPack>>;
+
+// Optimizer state storage: one flat buffer per unique DataType. Because the buffers
+// are keyed by DataType, their types are distinct and std::get<std::vector<T>> is
+// unambiguous with no tagging. Parameters that share a DataType share a buffer and
+// are sliced apart with per-dtype offsets (see dtype_index / num_dtypes).
+template <typename DedupedPack>
+using StateTuple = TransformTuple_t<StateVector, DtypeTuple<DedupedPack>>;
+
+template <typename T, typename DedupedPack>
+inline constexpr std::size_t dtype_index = TypeIndex<T, DtypeTuple<DedupedPack>>::value;
+
+template <typename DedupedPack>
+inline constexpr std::size_t num_dtypes = std::tuple_size_v<DtypeTuple<DedupedPack>>;
 
 template <typename T>
 struct PrintType {
@@ -580,9 +586,6 @@ struct PrintType<Quantized<Q, T>> {
     return "Quantized<" + detail::TypeName<Q>::name() + ", " + detail::TypeName<T>::name() + ">";
   }
 };
-
-template <typename DedupedTuple>
-using ExtractedVector = detail::TransformTuple_t<ExtractType_t, DedupedTuple>;
 
 std::string type_names(auto& parameters) {
   std::string type;

@@ -60,7 +60,7 @@ else()
   FetchContent_Declare(
     Eigen
     GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-    GIT_TAG 5.0.1
+    GIT_TAG 3.4.0
     EXCLUDE_FROM_ALL
   )
   set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)

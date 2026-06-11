@@ -26,7 +26,7 @@ struct SGDOptions {
 
 template <typename TypeTuple>
 struct SGDState : public OptimizerState {
-  detail::ExtractedVector<TypeTuple> momentum{};
+  detail::StateTuple<TypeTuple> momentum{};
 };
 
 template <typename DedupedPack>
@@ -42,10 +42,10 @@ class SGD : public Optimizer<DedupedPack> {
         (
           [&](auto& param_vec) {
             using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
-            auto& mom = std::get<detail::ExtractType_t<ParamType>>(state_.momentum);
+            using T = typename ParamType::DataType;
+            auto& mom = std::get<std::vector<T>>(state_.momentum);
             for (auto& param_ref : param_vec) {
               auto& param = param_ref.get();
-              using T = typename ParamType::DataType;
               mom.insert(mom.end(), param.numel(), T(0));
             }
           }(param_vecs),
@@ -56,17 +56,18 @@ class SGD : public Optimizer<DedupedPack> {
   }
 
   void step() override {
+    std::array<int, detail::num_dtypes<DedupedPack>> state_offsets{};
     std::apply(
       [&](auto&... param_vecs) {
         (
           [&](auto& param_vec) {
             using ParamType = typename std::remove_cvref_t<decltype(param_vec)>::value_type::type;
-            auto& mom_full = std::get<detail::ExtractType_t<ParamType>>(state_.momentum);
+            using T = typename ParamType::DataType;
+            auto& mom_full = std::get<std::vector<T>>(state_.momentum);
+            int& state_offset = state_offsets[detail::dtype_index<T, DedupedPack>];
 
-            int state_offset = 0;
             for (auto param_ref : param_vec) {
               auto& param = param_ref.get();
-              using T = typename ParamType::DataType;
 
               auto& grad_full = param.grad();
               auto& data_full = param.data();
