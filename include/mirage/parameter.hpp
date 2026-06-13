@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
 #include <cassert>
 #include <cereal/archives/binary.hpp>
 #include <cereal/types/string.hpp>
@@ -138,8 +137,6 @@ class Parameter {
   void transpose(int idx0, int idx1) {
     assert(rank() > 1 && "Cannot transpose 1D tensors");
     assert((idx0 < rank() && idx1 < rank()) && "Transpose indices exceed rank");
-    auto [min, max] = std::minmax(idx0, idx1);
-
     std::vector<int> indices = detail::compute_transpose_idx(idx0, idx1, shape_, strides_);
     std::vector<T> new_data(data_.size());
 
@@ -148,6 +145,7 @@ class Parameter {
     );
     data_ = std::move(new_data);
 
+    std::swap(shape_[idx0], shape_[idx1]);
     std::exclusive_scan(
       shape_.rbegin(), shape_.rend(), strides_.rbegin(), int{1}, std::multiplies<int>{}
     );
@@ -492,7 +490,7 @@ class Quantized : public Parameter<T> {
   float scale_ = 1.0f;
   float zero_point_ = 0.0f;
 
-  std::string qtype_name() {
+  std::string qtype_name() const {
     if constexpr (std::is_same_v<Q, int8_t>)
       return "int8";
     else if constexpr (std::is_same_v<Q, int16_t>)
@@ -529,7 +527,6 @@ concept NonConstPack = []<typename... Ts>(std::tuple<Ts...>*) {
   return ((!std::is_const_v<Ts> && ParamLike<Ts>) && ...);
 }(static_cast<T*>(nullptr));
 
-// Index of the first occurrence of T among a std::tuple's element types.
 template <typename T, typename Tuple>
 struct TypeIndex;
 template <typename T, typename... Rest>
@@ -553,16 +550,10 @@ template <typename T>
   requires ParamLike<T>
 using ExtractType_t = typename ExtractType<T>::Type;
 
-// The unique DataTypes spanned by a deduplicated parameter pack, e.g.
-// std::tuple<Parameter<float>, Quantized<int8_t, float>> -> std::tuple<float>.
 template <typename DedupedPack>
 using DtypeTuple =
   ApplyPackTraitWithTuple_t<DeduplicatedPack_t, TransformTuple_t<ExtractType_t, DedupedPack>>;
 
-// Optimizer state storage: one flat buffer per unique DataType. Because the buffers
-// are keyed by DataType, their types are distinct and std::get<std::vector<T>> is
-// unambiguous with no tagging. Parameters that share a DataType share a buffer and
-// are sliced apart with per-dtype offsets (see dtype_index / num_dtypes).
 template <typename DedupedPack>
 using StateTuple = TransformTuple_t<StateVector, DtypeTuple<DedupedPack>>;
 

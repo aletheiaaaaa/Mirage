@@ -10,7 +10,7 @@ namespace mirage::detail {
 template <typename T>
 struct is_span : std::false_type {};
 
-template <typename T, int E>
+template <typename T, std::size_t E>
 struct is_span<std::span<T, E>> : std::true_type {};
 
 template <typename T>
@@ -18,7 +18,7 @@ struct span_scalar {
   using type = T;
 };
 
-template <typename T, int E>
+template <typename T, std::size_t E>
 struct span_scalar<std::span<T, E>> : span_scalar<T> {};
 
 template <typename S, typename T>

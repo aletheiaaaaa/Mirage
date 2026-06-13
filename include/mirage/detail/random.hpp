@@ -69,16 +69,16 @@ class Generator {
     ctr_ = {{0, seed}};
   }
 
-  std::pair<four_f, four_f> generate() {
-    auto reg = [&]() {
-      auto r = rng_({{counter_++, seed_}}, key_);
-      return r.v;
-    };
+  kumi::tuple<four_f, four_f> generate() {
+    auto reg = [&]() { return rng_({{counter_++, seed_}}, key_); };
 
-    four_u i1(reg());
-    four_u i2(reg());
+    auto r1 = reg();
+    auto r2 = reg();
 
-    return boxmuller_wide<four_f>(i1, i2);
+    four_u i1(&r1.v[0]);
+    four_u i2(&r2.v[0]);
+
+    return random::boxmuller_wide<four_f>(i1, i2);
   }
 
   private:
